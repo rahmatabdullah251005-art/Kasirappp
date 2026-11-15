@@ -14,8 +14,10 @@ import com.example.data.remote.SaleItemDoc
 import com.example.data.remote.SaleTransactionDoc
 import com.example.data.remote.StaffPinProfileDoc
 import com.example.data.remote.StockHistoryDoc
+import com.example.data.remote.StoreCategoryDoc
 import com.example.data.remote.StoreDoc
 import com.example.data.remote.StoreInviteDoc
+import com.example.util.BestSellerItemSummary
 import com.example.util.DateUtils
 import com.example.util.PinHasher
 import com.example.util.QrisConfigManager
@@ -87,6 +89,7 @@ data class DailyReportUiState(
     val marginPercent: Double = 0.0,
     val paymentTotals: Map<PaymentMethod, Pair<Int, Long>> = emptyMap(),
     val categoryBreakdowns: List<CategoryBreakdown> = emptyList(),
+    val bestSellers: List<BestSellerItemSummary> = emptyList(),
     val soldItems: List<SoldItemSummary> = emptyList(),
     val transactions: List<CloudSaleWithItems> = emptyList()
 )
@@ -135,6 +138,9 @@ class PosViewModel(
 
     private val _selectedReportDateKey = MutableStateFlow(DateUtils.todayKey())
     val selectedReportDateKey: StateFlow<String> = _selectedReportDateKey.asStateFlow()
+
+    private val _selectedCashierRecapDateKey = MutableStateFlow(DateUtils.todayKey())
+    val selectedCashierRecapDateKey: StateFlow<String> = _selectedCashierRecapDateKey.asStateFlow()
 
     private val _reportPeriodMode = MutableStateFlow(ReportPeriodMode.SELECTED_DAY)
     val reportPeriodMode: StateFlow<ReportPeriodMode> = _reportPeriodMode.asStateFlow()
@@ -228,7 +234,12 @@ class PosViewModel(
         else repository.observeStoreInvitesAsOwner(ctx.storeId).unwrapFirestoreCatch("observeStoreInvites", emptyList())
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
 
-    // --- PRODUCTS & STOCK HISTORIES ---
+    // --- CATEGORIES, PRODUCTS & STOCK HISTORIES ---
+    val storeCategories: StateFlow<List<StoreCategoryDoc>> = activeStoreContext.flatMapLatest { ctx ->
+        if (ctx == null) flowOf(emptyList())
+        else repository.observeCategories(ctx.storeId).unwrapFirestoreCatch("observeCategories", emptyList())
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
+
     val allProducts: StateFlow<List<ProductDoc>> = activeStoreContext.flatMapLatest { ctx ->
         if (ctx == null) flowOf(emptyList())
         else repository.observeProducts(ctx.storeId).unwrapFirestoreCatch("observeProducts", emptyList())
@@ -376,6 +387,7 @@ class PosViewModel(
                 .sortedByDescending { it.revenue }
 
             val soldItems = ReportExporter.aggregateSoldItems(filtered)
+            val bestSellers = ReportExporter.aggregateBestSellers(filtered, limit = 10)
 
             DailyReportUiState(
                 periodLabel = periodLabel,
@@ -389,10 +401,14 @@ class PosViewModel(
                 marginPercent = margin,
                 paymentTotals = paymentTotals,
                 categoryBreakdowns = categoryBreakdowns,
+                bestSellers = bestSellers,
                 soldItems = soldItems,
                 transactions = filtered
             )
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), DailyReportUiState())
+
+    val allOwnerTransactions: StateFlow<List<CloudSaleWithItems>> =
+        ownerCombinedSalesFlow.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
 
     val sevenDayTrend: StateFlow<List<DailyTrendPoint>> =
         ownerCombinedSalesFlow.map { allSales ->
@@ -414,6 +430,31 @@ class PosViewModel(
             if (ctx == null) flowOf(emptyList())
             else repository.observeCashierOwnTransactions(ctx.storeId, DateUtils.todayKey())
                 .unwrapFirestoreCatch("observeCashierOwnTxs", emptyList())
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
+
+    private val cashierAllOwnTransactionsFlow: Flow<List<SaleTransactionDoc>> =
+        activeStoreContext.flatMapLatest { ctx ->
+            if (ctx == null) flowOf(emptyList())
+            else repository.observeAllCashierOwnTransactions(ctx.storeId)
+                .unwrapFirestoreCatch("observeAllCashierOwnTxs", emptyList())
+        }
+
+    private val cashierAllOwnSaleItemsFlow: Flow<List<SaleItemDoc>> =
+        activeStoreContext.flatMapLatest { ctx ->
+            if (ctx == null) flowOf(emptyList())
+            else repository.observeCashierOwnSaleItems(ctx.storeId)
+                .unwrapFirestoreCatch("observeCashierOwnItems", emptyList())
+        }
+
+    val cashierRecapSales: StateFlow<List<CloudSaleWithItems>> =
+        combine(
+            cashierAllOwnTransactionsFlow,
+            cashierAllOwnSaleItemsFlow,
+            _selectedCashierRecapDateKey
+        ) { txs, items, dateKey ->
+            val itemsByTx = items.groupBy { it.transactionId }
+            txs.filter { it.dateKey == dateKey }
+                .map { tx -> CloudSaleWithItems(transaction = tx, items = itemsByTx[tx.id].orEmpty()) }
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
 
     // --- STORE ONBOARDING ACTIONS ---
@@ -580,6 +621,7 @@ class PosViewModel(
         discountAmount: Long,
         paymentMethod: PaymentMethod,
         amountPaid: Long,
+        customerName: String,
         notes: String,
         qrisReference: String
     ) {
@@ -601,6 +643,7 @@ class PosViewModel(
                 amountPaid = amountPaid,
                 cashierName = cashier.fullName,
                 cashierRole = cashier.roleEnum,
+                customerName = customerName,
                 notes = notes,
                 qrisReference = qrisReference
             ).onSuccess { receipt ->
@@ -632,13 +675,102 @@ class PosViewModel(
         }
     }
 
+    // --- CATEGORY MANAGEMENT (OWNER) ---
+    fun bootstrapDefaultCategoriesIfEmpty(onDone: () -> Unit) {
+        val storeCtx = activeStoreContext.value ?: return
+        if (storeCtx.cloudMemberRole != UserRole.OWNER) {
+            onDone()
+            return
+        }
+        viewModelScope.launch {
+            repository.seedDefaultCategoriesIfEmpty(storeCtx.storeId)
+            onDone()
+        }
+    }
+
+    fun createCategory(
+        displayName: String,
+        customPrefix: String,
+        colorIndex: Int?,
+        onSuccess: (StoreCategoryDoc) -> Unit = {}
+    ) {
+        val storeCtx = activeStoreContext.value ?: return
+        val user = _currentPinProfile.value ?: return
+        if (user.roleEnum != UserRole.OWNER || storeCtx.cloudMemberRole != UserRole.OWNER) {
+            emitToast("Hanya Owner yang dapat menambah kategori")
+            return
+        }
+        viewModelScope.launch {
+            repository.createCategory(
+                storeId = storeCtx.storeId,
+                displayName = displayName,
+                customPrefix = customPrefix,
+                colorIndex = colorIndex
+            ).onSuccess { created ->
+                emitToast("Kategori '${created.displayName}' ditambahkan")
+                onSuccess(created)
+            }.onFailure { err ->
+                emitToast(err.message ?: "Gagal menambah kategori")
+            }
+        }
+    }
+
+    fun deleteCategory(category: StoreCategoryDoc) {
+        val storeCtx = activeStoreContext.value ?: return
+        val user = _currentPinProfile.value ?: return
+        if (user.roleEnum != UserRole.OWNER || storeCtx.cloudMemberRole != UserRole.OWNER) {
+            emitToast("Hanya Owner yang dapat menghapus kategori")
+            return
+        }
+        viewModelScope.launch {
+            repository.deleteCategory(storeCtx.storeId, category.id)
+                .onSuccess {
+                    emitToast("Kategori '${category.displayName}' dikurangi/dihapus")
+                }
+                .onFailure { err ->
+                    emitToast(err.message ?: "Gagal menghapus kategori")
+                }
+        }
+    }
+
+    fun restoreDefaultCategories() {
+        val storeCtx = activeStoreContext.value ?: return
+        val user = _currentPinProfile.value ?: return
+        if (user.roleEnum != UserRole.OWNER || storeCtx.cloudMemberRole != UserRole.OWNER) {
+            emitToast("Hanya Owner yang dapat memuat kategori standar")
+            return
+        }
+        viewModelScope.launch {
+            val existingCodes = storeCategories.value.map { it.code.uppercase() }.toSet()
+            var addedCount = 0
+            StoreCategoryDoc.defaultPresets().forEach { preset ->
+                if (preset.code.uppercase() !in existingCodes) {
+                    repository.createCategory(
+                        storeId = storeCtx.storeId,
+                        displayName = preset.displayName,
+                        customPrefix = preset.codePrefix,
+                        colorIndex = preset.colorIndex
+                    ).onSuccess { addedCount++ }
+                }
+            }
+            if (addedCount > 0) {
+                emitToast("$addedCount kategori standar ditambahkan")
+            } else {
+                emitToast("Semua kategori standar sudah tersedia")
+            }
+        }
+    }
+
     // --- PRODUCT & STOCK MANAGEMENT (OWNER) ---
     fun saveProduct(
         existingProduct: ProductDoc?,
         skuCode: String,
         name: String,
-        category: ProductCategory,
-        variantInfo: String,
+        categoryCode: String,
+        variantName: String = "",
+        color: String = "",
+        size: String = "",
+        variantInfo: String = "",
         costPrice: Long,
         sellingPrice: Long,
         discountPercent: Int,
@@ -658,8 +790,11 @@ class PosViewModel(
                 existingProduct = existingProduct,
                 skuCode = skuCode,
                 name = name,
-                category = category,
+                categoryCode = categoryCode,
                 variantInfo = variantInfo,
+                variantName = variantName,
+                color = color,
+                size = size,
                 costPrice = costPrice,
                 sellingPrice = sellingPrice,
                 discountPercent = discountPercent,
@@ -730,6 +865,35 @@ class PosViewModel(
                 onSuccess()
             }.onFailure { err ->
                 emitToast(err.message ?: "Gagal restok barang")
+            }
+        }
+    }
+
+    fun adjustProductStock(
+        product: ProductDoc,
+        isAddition: Boolean,
+        quantity: Int,
+        note: String,
+        onSuccess: () -> Unit
+    ) {
+        val storeCtx = activeStoreContext.value ?: return
+        val user = _currentPinProfile.value ?: return
+        val isOwner = user.roleEnum == UserRole.OWNER && storeCtx.cloudMemberRole == UserRole.OWNER
+        viewModelScope.launch {
+            repository.adjustProductStock(
+                storeId = storeCtx.storeId,
+                product = product,
+                isAddition = isAddition,
+                quantity = quantity,
+                actorName = user.fullName,
+                note = note,
+                includeUnitCost = isOwner
+            ).onSuccess { newStock ->
+                val deltaText = if (isAddition) "Penambahan +$quantity" else "Pengurangan -$quantity"
+                emitToast("$deltaText pcs '${product.name}' berhasil dicatat (Stok: $newStock pcs)")
+                onSuccess()
+            }.onFailure { err ->
+                emitToast(err.message ?: "Gagal menyesuaikan stok barang")
             }
         }
     }
@@ -860,13 +1024,18 @@ class PosViewModel(
         _selectedReportDateKey.value = dateKey
     }
 
+    fun selectCashierRecapDate(dateKey: String) {
+        _selectedCashierRecapDateKey.value = dateKey
+    }
+
     fun setReportPeriodMode(mode: ReportPeriodMode) {
         _reportPeriodMode.value = mode
     }
 
-    fun generateNextSkuSuggestion(category: ProductCategory): String {
-        val prefix = "UMT-${category.codePrefix}-"
-        val existingCount = allProducts.value.count { it.categoryEnum == category } + 1
+    fun generateNextSkuSuggestion(categoryCode: String): String {
+        val resolved = StoreCategoryDoc.resolve(categoryCode, storeCategories.value)
+        val prefix = "UMT-${resolved.codePrefix}-"
+        val existingCount = allProducts.value.count { it.category.equals(categoryCode, ignoreCase = true) } + 1
         var candidate = prefix + existingCount.toString().padStart(3, '0')
         val existingSkus = allProducts.value.map { it.skuCode.uppercase() }.toSet()
         var counter = existingCount

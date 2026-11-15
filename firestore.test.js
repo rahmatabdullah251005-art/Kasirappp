@@ -5,7 +5,12 @@ const {
 } = require("@firebase/rules-unit-testing");
 const { test, before, after, beforeEach } = require("node:test");
 const fs = require("node:fs");
-const { serverTimestamp } = require("/usr/local/lib/node_modules/@firebase/rules-unit-testing/node_modules/firebase/firestore");
+let serverTimestamp;
+try {
+  ({ serverTimestamp } = require("firebase/firestore"));
+} catch (_) {
+  ({ serverTimestamp } = require("/usr/local/lib/node_modules/@firebase/rules-unit-testing/node_modules/firebase/firestore"));
+}
 
 let testEnv;
 const PROJECT_ID = process.env.GCP_PROJECT || "demo-no-project";
@@ -226,6 +231,7 @@ test("Kasir: can read products, decrement stock on sale, and create own transact
       cashierUid: KASIR_UID,
       cashierName: "Aisyah",
       cashierRole: "KASIR",
+      customerName: "Ibu Fatimah",
       createdAt: serverTimestamp(),
     })
   );
@@ -288,3 +294,206 @@ test("Email spoofing test: unverified email cannot read or accept store_invites"
     })
   );
 });
+
+test("Categories: Owner can add, update, delete categories & create product with custom category; Kasir/Stranger cannot mutate categories", async () => {
+  await seedStoreAndProduct();
+  const ownerDb = testEnv.authenticatedContext(OWNER_UID, { email: "owner@test.com", email_verified: true }).firestore();
+  const kasirDb = testEnv.authenticatedContext(KASIR_UID).firestore();
+  const strangerDb = testEnv.authenticatedContext(STRANGER_UID).firestore();
+
+  const catRef = ownerDb.collection("stores").doc(STORE_ID).collection("categories").doc("cat_parfum");
+  await assertSucceeds(
+    catRef.set({
+      code: "PARFUM_ARAB",
+      displayName: "Parfum Arab",
+      codePrefix: "PF",
+      colorIndex: 4,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    })
+  );
+
+  // Reject ghost field in category
+  await assertFails(
+    ownerDb.collection("stores").doc(STORE_ID).collection("categories").doc("cat_ghost").set({
+      code: "GHOST",
+      displayName: "Ghost",
+      codePrefix: "GH",
+      colorIndex: 0,
+      extraSecret: true,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    })
+  );
+
+  // Owner can save product using custom category
+  await assertSucceeds(
+    ownerDb.collection("stores").doc(STORE_ID).collection("products").doc("prod_custom_cat").set({
+      skuCode: "UMT-PF-001",
+      name: "Misk Thaharah Original",
+      category: "PARFUM_ARAB",
+      costPrice: 30000,
+      sellingPrice: 60000,
+      stock: 15,
+      minStockAlert: 3,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    })
+  );
+
+  // Kasir can read categories, CANNOT create or delete
+  await assertSucceeds(kasirDb.collection("stores").doc(STORE_ID).collection("categories").get());
+  await assertFails(
+    kasirDb.collection("stores").doc(STORE_ID).collection("categories").doc("cat_kasir").set({
+      code: "HACK",
+      displayName: "Hack",
+      codePrefix: "HK",
+      colorIndex: 1,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    })
+  );
+  await assertFails(
+    kasirDb.collection("stores").doc(STORE_ID).collection("categories").doc("cat_parfum").delete()
+  );
+
+  // Stranger cannot read or write categories
+  await assertFails(strangerDb.collection("stores").doc(STORE_ID).collection("categories").get());
+
+  // Owner can delete category
+  await assertSucceeds(catRef.delete());
+});
+
+test("Product Attributes: Owner can save optional variantName, color, size and Kasir can write sale_item variantSummary", async () => {
+  await seedStoreAndProduct();
+  const ownerDb = testEnv.authenticatedContext(OWNER_UID, { email: "owner@test.com", email_verified: true }).firestore();
+  const kasirDb = testEnv.authenticatedContext(KASIR_UID).firestore();
+
+  const prodRef = ownerDb.collection("stores").doc(STORE_ID).collection("products").doc("prod_attr_1");
+  await assertSucceeds(
+    prodRef.set({
+      skuCode: "UMT-BJ-099",
+      name: "Gamis Abaya Silk",
+      category: "BAJU",
+      variantInfo: "Polos • Sage Green • L",
+      variantName: "Polos",
+      color: "Sage Green",
+      size: "L",
+      costPrice: 150000,
+      sellingPrice: 230000,
+      stock: 10,
+      minStockAlert: 3,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    })
+  );
+
+  // Reject oversized color field (> 60 chars)
+  await assertFails(
+    prodRef.update({
+      color: "X".repeat(65),
+      updatedAt: serverTimestamp(),
+    })
+  );
+
+  // Kasir can record sale_item with variantSummary
+  await assertSucceeds(
+    kasirDb.collection("stores").doc(STORE_ID).collection("sale_items").doc("si_attr_1").set({
+      transactionId: "tx_attr_1",
+      dateKey: "2026-11-15",
+      timestampMillis: Date.now(),
+      productId: "prod_attr_1",
+      skuCode: "UMT-BJ-099",
+      productName: "Gamis Abaya Silk",
+      variantSummary: "Polos • Sage Green • L",
+      categoryName: "Baju & Busana",
+      quantity: 1,
+      unitCostPrice: 150000,
+      unitSellingPrice: 230000,
+      subtotalRevenue: 230000,
+      subtotalCost: 150000,
+      subtotalProfit: 80000,
+      cashierUid: KASIR_UID,
+      createdAt: serverTimestamp(),
+    })
+  );
+});
+
+test("Stock Adjustments: Kasir can increment and decrement product stock and log RESTOK/KOREKSI history; only Owner can read stock_histories", async () => {
+  await seedStoreAndProduct();
+  const ownerDb = testEnv.authenticatedContext(OWNER_UID, { email: "owner@test.com", email_verified: true }).firestore();
+  const kasirDb = testEnv.authenticatedContext(KASIR_UID).firestore();
+
+  // Kasir adds stock (+5 => 15) and writes RESTOK history
+  await assertSucceeds(
+    kasirDb.collection("stores").doc(STORE_ID).collection("products").doc("prod_1").update({
+      stock: 15,
+      updatedAt: serverTimestamp(),
+    })
+  );
+  await assertSucceeds(
+    kasirDb.collection("stores").doc(STORE_ID).collection("stock_histories").doc("hist_kasir_add").set({
+      productId: "prod_1",
+      productName: "Gamis Madinah",
+      changeType: "RESTOK",
+      quantityDelta: 5,
+      stockAfter: 15,
+      unitCostAtChange: 0,
+      actorName: "Aisyah (Kasir)",
+      actorUid: KASIR_UID,
+      note: "Barang masuk supplier",
+      timestampMillis: Date.now(),
+      createdAt: serverTimestamp(),
+    })
+  );
+
+  // Kasir reduces stock (-3 => 12) and writes KOREKSI history
+  await assertSucceeds(
+    kasirDb.collection("stores").doc(STORE_ID).collection("products").doc("prod_1").update({
+      stock: 12,
+      updatedAt: serverTimestamp(),
+    })
+  );
+  await assertSucceeds(
+    kasirDb.collection("stores").doc(STORE_ID).collection("stock_histories").doc("hist_kasir_sub").set({
+      productId: "prod_1",
+      productName: "Gamis Madinah",
+      changeType: "KOREKSI",
+      quantityDelta: -3,
+      stockAfter: 12,
+      unitCostAtChange: 0,
+      actorName: "Aisyah (Kasir)",
+      actorUid: KASIR_UID,
+      note: "Barang rusak",
+      timestampMillis: Date.now(),
+      createdAt: serverTimestamp(),
+    })
+  );
+
+  // Kasir CANNOT set negative stock or touch costPrice
+  await assertFails(
+    kasirDb.collection("stores").doc(STORE_ID).collection("products").doc("prod_1").update({
+      stock: -1,
+      updatedAt: serverTimestamp(),
+    })
+  );
+  await assertFails(
+    kasirDb.collection("stores").doc(STORE_ID).collection("products").doc("prod_1").update({
+      stock: 20,
+      costPrice: 50000,
+      updatedAt: serverTimestamp(),
+    })
+  );
+
+  // Kasir CANNOT read stock_histories (Owner-only recap/history)
+  await assertFails(
+    kasirDb.collection("stores").doc(STORE_ID).collection("stock_histories").get()
+  );
+
+  // Owner CAN read stock_histories
+  await assertSucceeds(
+    ownerDb.collection("stores").doc(STORE_ID).collection("stock_histories").get()
+  );
+});
+
+

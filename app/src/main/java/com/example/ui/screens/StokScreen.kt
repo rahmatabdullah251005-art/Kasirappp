@@ -1,6 +1,7 @@
 package com.example.ui.screens
 
 import android.graphics.Bitmap
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
@@ -26,6 +27,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.AddBox
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.Category
 import androidx.compose.material.icons.rounded.Clear
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
@@ -35,8 +37,10 @@ import androidx.compose.material.icons.rounded.LocalOffer
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.QrCode2
 import androidx.compose.material.icons.rounded.QrCodeScanner
+import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Storefront
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.Wallet
 import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material3.AlertDialog
@@ -54,6 +58,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -79,36 +84,48 @@ import com.example.data.local.entity.ProductCategory
 import com.example.data.local.entity.UserRole
 import com.example.data.remote.ProductDoc
 import com.example.data.remote.StockHistoryDoc
+import com.example.data.remote.StoreCategoryDoc
 import com.example.ui.components.CategoryBadge
+import com.example.ui.components.CategoryManagementDialog
 import com.example.ui.components.KpiMetricCard
 import com.example.ui.components.NumericOutlinedField
+import com.example.ui.components.ProductAttributeChipsRow
 import com.example.ui.components.RestockDialog
 import com.example.ui.components.SingleCodeQrScannerDialog
+import com.example.ui.components.StaffStockAdjustmentDialog
+import com.example.ui.components.StockHistoryDialog
 import com.example.ui.components.StockStatusBadge
 import com.example.ui.theme.DangerCrimson
 import com.example.ui.theme.ProfitGreen
 import com.example.ui.theme.ProfitGreenContainer
 import com.example.ui.theme.WarningAmber
 import com.example.util.CurrencyFormatter
-import com.example.util.DateUtils
 import com.example.util.QrCodeGenerator
+import com.example.util.StockHistoryFilterType
+import com.example.util.StockHistoryPeriodFilter
+import com.example.util.StockHistorySummarizer
 import kotlin.math.roundToLong
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun StokScreen(
+    storeName: String = "UM TAZKIYAH",
     userRole: UserRole,
     products: List<ProductDoc>,
+    categories: List<StoreCategoryDoc>,
     stockHistories: List<StockHistoryDoc>,
     prefilledSkuRequest: String?,
     onClearPrefilledSkuRequest: () -> Unit,
     openLowStockFilterTrigger: Int = 0,
-    generateNextSku: (ProductCategory) -> String,
+    generateNextSku: (String) -> String,
     onSaveProduct: (
         existingProduct: ProductDoc?,
         skuCode: String,
         name: String,
-        category: ProductCategory,
+        categoryCode: String,
+        variantName: String,
+        color: String,
+        size: String,
         variantInfo: String,
         costPrice: Long,
         sellingPrice: Long,
@@ -131,12 +148,28 @@ fun StokScreen(
         note: String,
         onSuccess: () -> Unit
     ) -> Unit,
+    onAdjustStock: (
+        product: ProductDoc,
+        isAddition: Boolean,
+        quantity: Int,
+        note: String,
+        onSuccess: () -> Unit
+    ) -> Unit = { _, _, _, _, _ -> },
     onDeleteProduct: (ProductDoc) -> Unit,
-    onSeedStarterCatalog: () -> Unit
+    onCreateCategory: (
+        displayName: String,
+        customPrefix: String,
+        colorIndex: Int,
+        onSuccess: (StoreCategoryDoc) -> Unit
+    ) -> Unit,
+    onDeleteCategory: (StoreCategoryDoc) -> Unit,
+    onRestoreDefaultCategories: () -> Unit,
+    onSeedStarterCatalog: () -> Unit,
+    onShowMessage: (String) -> Unit = {}
 ) {
     val isOwner = userRole == UserRole.OWNER
     var searchQuery by remember { mutableStateOf("") }
-    var filterMode by remember { mutableStateOf("ALL") } // ALL, LOW, PROMO, or category.name
+    var filterMode by remember { mutableStateOf("ALL") } // ALL, LOW, PROMO, or category.code
     var showFormSheet by remember { mutableStateOf(false) }
     var editingProduct by remember { mutableStateOf<ProductDoc?>(null) }
     var prefilledSkuForSheet by remember { mutableStateOf<String?>(null) }
@@ -144,8 +177,11 @@ fun StokScreen(
     var qrPreviewProduct by remember { mutableStateOf<ProductDoc?>(null) }
     var pricingTargetProduct by remember { mutableStateOf<ProductDoc?>(null) }
     var restockTargetProduct by remember { mutableStateOf<ProductDoc?>(null) }
+    var stockAdjustTarget by remember { mutableStateOf<Pair<ProductDoc, Boolean>?>(null) }
     var deleteConfirmProduct by remember { mutableStateOf<ProductDoc?>(null) }
     var showHistoryDialog by remember { mutableStateOf(false) }
+    var showCategoryManagerDialog by remember { mutableStateOf(false) }
+    var lastAddedCategoryCode by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(prefilledSkuRequest) {
         if (!prefilledSkuRequest.isNullOrBlank() && isOwner) {
@@ -162,6 +198,14 @@ fun StokScreen(
         }
     }
 
+    LaunchedEffect(categories) {
+        if (filterMode !in listOf("ALL", "LOW", "PROMO") &&
+            categories.none { it.code.equals(filterMode, ignoreCase = true) }
+        ) {
+            filterMode = "ALL"
+        }
+    }
+
     val lowStockCount = remember(products) { products.count { it.isLowStock } }
     val promoCount = remember(products) { products.count { it.discountPercent > 0 } }
     val totalUnits = remember(products) { products.sumOf { it.stock } }
@@ -174,11 +218,14 @@ fun StokScreen(
                 "ALL" -> true
                 "LOW" -> item.isLowStock
                 "PROMO" -> item.discountPercent > 0
-                else -> item.categoryEnum.name == filterMode
+                else -> item.category.equals(filterMode, ignoreCase = true)
             }
             val matchQuery = q.isEmpty() ||
                 item.name.lowercase().contains(q) ||
                 item.skuCode.lowercase().contains(q) ||
+                item.variantName.lowercase().contains(q) ||
+                item.color.lowercase().contains(q) ||
+                item.size.lowercase().contains(q) ||
                 item.variantInfo.lowercase().contains(q)
             matchFilter && matchQuery
         }
@@ -214,6 +261,58 @@ fun StokScreen(
                         )
                     }
                 }
+                item {
+                    val todayStockSummary = remember(stockHistories) {
+                        val todayLogs = StockHistorySummarizer.filterHistories(
+                            histories = stockHistories,
+                            typeFilter = StockHistoryFilterType.ALL,
+                            periodFilter = StockHistoryPeriodFilter.TODAY
+                        )
+                        StockHistorySummarizer.summarize(todayLogs)
+                    }
+                    Surface(
+                        shape = MaterialTheme.shapes.medium,
+                        color = MaterialTheme.colorScheme.surfaceContainerLow,
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("owner_stok_recap_strip")
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Rekapan Mutasi Stok Hari Ini",
+                                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
+                                )
+                                Text(
+                                    text = "+${todayStockSummary.totalAddedUnits} masuk • -${todayStockSummary.totalManualReducedUnits} kurang manual • -${todayStockSummary.totalSalesReducedUnits} terjual",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            FilledTonalButton(
+                                onClick = { showHistoryDialog = true },
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                                modifier = Modifier
+                                    .heightIn(min = 40.dp)
+                                    .testTag("stok_open_recap_button")
+                            ) {
+                                Icon(Icons.Rounded.History, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("History", style = MaterialTheme.typography.labelMedium)
+                            }
+                        }
+                    }
+                }
             } else {
                 item {
                     Surface(
@@ -232,7 +331,7 @@ fun StokScreen(
                                 tint = MaterialTheme.colorScheme.onSecondaryContainer
                             )
                             Text(
-                                text = "Mode Cek Stok Pegawai Kasir: Anda dapat memeriksa jumlah stok, harga jual, diskon promo & QR barang. Data modal & ubah stok khusus Owner.",
+                                text = "Mode Stok Pegawai Kasir: Anda dapat memeriksa stok, menambah (+) atau mengurangi (-) stok barang. Data modal, harga & katalog produk khusus Owner.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSecondaryContainer
                             )
@@ -298,12 +397,28 @@ fun StokScreen(
                             label = { Text("Menipis ($lowStockCount)") }
                         )
                     }
-                    items(ProductCategory.entries) { cat ->
+                    items(categories, key = { it.id }) { cat ->
+                        val catCount = products.count { it.category.equals(cat.code, ignoreCase = true) }
                         FilterChip(
-                            selected = filterMode == cat.name,
-                            onClick = { filterMode = cat.name },
-                            label = { Text(cat.displayName) }
+                            selected = filterMode.equals(cat.code, ignoreCase = true),
+                            onClick = { filterMode = cat.code },
+                            label = { Text("${cat.displayName} ($catCount)") }
                         )
+                    }
+                    if (isOwner) {
+                        item {
+                            FilledTonalButton(
+                                onClick = { showCategoryManagerDialog = true },
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                modifier = Modifier
+                                    .height(34.dp)
+                                    .testTag("manage_categories_chip")
+                            ) {
+                                Icon(Icons.Rounded.Category, contentDescription = null, modifier = Modifier.size(15.dp))
+                                Spacer(Modifier.width(5.dp))
+                                Text("+/- Kategori", style = MaterialTheme.typography.labelMedium)
+                            }
+                        }
                     }
                 }
             }
@@ -351,10 +466,14 @@ fun StokScreen(
                 items(filteredProducts, key = { it.id }) { product ->
                     StokProductCard(
                         product = product,
+                        categories = categories,
                         isOwner = isOwner,
                         onShowQr = { qrPreviewProduct = product },
                         onEditPricing = { pricingTargetProduct = product },
                         onRestock = { restockTargetProduct = product },
+                        onStaffAdjustStock = { isAddition ->
+                            stockAdjustTarget = product to isAddition
+                        },
                         onEdit = {
                             editingProduct = product
                             prefilledSkuForSheet = null
@@ -392,10 +511,14 @@ fun StokScreen(
             ProductFormSheetContent(
                 existingProduct = editingProduct,
                 initialSku = prefilledSkuForSheet,
+                categories = categories,
+                lastAddedCategoryCode = lastAddedCategoryCode,
+                onClearLastAddedCategory = { lastAddedCategoryCode = null },
                 generateNextSku = generateNextSku,
+                onOpenCategoryManager = { showCategoryManagerDialog = true },
                 onCancel = { showFormSheet = false },
-                onSave = { existing, sku, name, category, variant, cost, sell, discPct, stock, minAlert ->
-                    onSaveProduct(existing, sku, name, category, variant, cost, sell, discPct, stock, minAlert) {
+                onSave = { existing, sku, name, categoryCode, variantName, color, size, variantInfo, cost, sell, discPct, stock, minAlert ->
+                    onSaveProduct(existing, sku, name, categoryCode, variantName, color, size, variantInfo, cost, sell, discPct, stock, minAlert) {
                         showFormSheet = false
                     }
                 }
@@ -434,6 +557,19 @@ fun StokScreen(
         )
     }
 
+    stockAdjustTarget?.let { (product, initialIsAddition) ->
+        StaffStockAdjustmentDialog(
+            product = product,
+            initialIsAddition = initialIsAddition,
+            onDismiss = { stockAdjustTarget = null },
+            onConfirm = { isAddition, qty, note ->
+                onAdjustStock(product, isAddition, qty, note) {
+                    stockAdjustTarget = null
+                }
+            }
+        )
+    }
+
     deleteConfirmProduct?.let { product ->
         AlertDialog(
             onDismissRequest = { deleteConfirmProduct = null },
@@ -460,8 +596,26 @@ fun StokScreen(
 
     if (showHistoryDialog && isOwner) {
         StockHistoryDialog(
+            storeName = storeName,
             histories = stockHistories,
+            onShowMessage = onShowMessage,
             onDismiss = { showHistoryDialog = false }
+        )
+    }
+
+    if (showCategoryManagerDialog && isOwner) {
+        CategoryManagementDialog(
+            categories = categories,
+            products = products,
+            onCreateCategory = { name, prefix, colorIdx, onDone ->
+                onCreateCategory(name, prefix, colorIdx) { created ->
+                    lastAddedCategoryCode = created.code
+                    onDone(created)
+                }
+            },
+            onDeleteCategory = onDeleteCategory,
+            onRestoreDefaults = onRestoreDefaultCategories,
+            onDismiss = { showCategoryManagerDialog = false }
         )
     }
 }
@@ -469,10 +623,12 @@ fun StokScreen(
 @Composable
 private fun StokProductCard(
     product: ProductDoc,
+    categories: List<StoreCategoryDoc>,
     isOwner: Boolean,
     onShowQr: () -> Unit,
     onEditPricing: () -> Unit,
     onRestock: () -> Unit,
+    onStaffAdjustStock: (isAddition: Boolean) -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit
 ) {
@@ -495,7 +651,7 @@ private fun StokProductCard(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    CategoryBadge(category = product.categoryEnum)
+                    CategoryBadge(category = product.resolvedCategory(categories))
                     Surface(
                         shape = RoundedCornerShape(6.dp),
                         color = MaterialTheme.colorScheme.surfaceVariant
@@ -523,18 +679,12 @@ private fun StokProductCard(
                 StockStatusBadge(stock = product.stock, minAlert = product.minStockAlert)
             }
 
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(
                     text = product.name,
                     style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                 )
-                if (product.variantInfo.isNotBlank()) {
-                    Text(
-                        text = product.variantInfo,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+                ProductAttributeChipsRow(product = product)
             }
 
             Row(
@@ -631,6 +781,32 @@ private fun StokProductCard(
                     IconButton(onClick = onDelete, modifier = Modifier.size(38.dp)) {
                         Icon(Icons.Rounded.Delete, contentDescription = "Hapus produk", tint = DangerCrimson)
                     }
+                } else {
+                    FilledTonalButton(
+                        onClick = { onStaffAdjustStock(true) },
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .heightIn(min = 42.dp)
+                            .testTag("staff_add_stock_button_${product.id}")
+                    ) {
+                        Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Tambah", style = MaterialTheme.typography.labelMedium, maxLines = 1)
+                    }
+                    OutlinedButton(
+                        onClick = { onStaffAdjustStock(false) },
+                        enabled = product.stock > 0,
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .heightIn(min = 42.dp)
+                            .testTag("staff_reduce_stock_button_${product.id}")
+                    ) {
+                        Icon(Icons.Rounded.Remove, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Kurangi", style = MaterialTheme.typography.labelMedium, maxLines = 1)
+                    }
                 }
             }
         }
@@ -641,13 +817,20 @@ private fun StokProductCard(
 private fun ProductFormSheetContent(
     existingProduct: ProductDoc?,
     initialSku: String?,
-    generateNextSku: (ProductCategory) -> String,
+    categories: List<StoreCategoryDoc>,
+    lastAddedCategoryCode: String?,
+    onClearLastAddedCategory: () -> Unit,
+    generateNextSku: (String) -> String,
+    onOpenCategoryManager: () -> Unit,
     onCancel: () -> Unit,
     onSave: (
         existingProduct: ProductDoc?,
         skuCode: String,
         name: String,
-        category: ProductCategory,
+        categoryCode: String,
+        variantName: String,
+        color: String,
+        size: String,
         variantInfo: String,
         costPrice: Long,
         sellingPrice: Long,
@@ -656,14 +839,41 @@ private fun ProductFormSheetContent(
         minStockAlert: Int
     ) -> Unit
 ) {
-    var category by remember { mutableStateOf(existingProduct?.categoryEnum ?: ProductCategory.BAJU) }
+    val defaultCatCode = existingProduct?.category
+        ?: categories.firstOrNull()?.code
+        ?: ProductCategory.BAJU.name
+    var categoryCode by remember { mutableStateOf(defaultCatCode) }
     var skuCode by remember {
         mutableStateOf(
-            existingProduct?.skuCode ?: initialSku ?: generateNextSku(ProductCategory.BAJU)
+            existingProduct?.skuCode ?: initialSku ?: generateNextSku(defaultCatCode)
         )
     }
+    LaunchedEffect(lastAddedCategoryCode) {
+        if (!lastAddedCategoryCode.isNullOrBlank()) {
+            categoryCode = lastAddedCategoryCode
+            if (existingProduct == null && initialSku == null) {
+                skuCode = generateNextSku(lastAddedCategoryCode)
+            }
+            onClearLastAddedCategory()
+        }
+    }
     var name by remember { mutableStateOf(existingProduct?.name ?: "") }
-    var variantInfo by remember { mutableStateOf(existingProduct?.variantInfo ?: "") }
+    var includeAttributes by remember {
+        mutableStateOf(existingProduct?.hasAttributes == true)
+    }
+    var variantName by remember {
+        mutableStateOf(
+            existingProduct?.let { p ->
+                if (p.variantName.isNotBlank() || p.color.isNotBlank() || p.size.isNotBlank()) {
+                    p.variantName
+                } else {
+                    p.variantInfo
+                }
+            } ?: ""
+        )
+    }
+    var productColor by remember { mutableStateOf(existingProduct?.color ?: "") }
+    var productSize by remember { mutableStateOf(existingProduct?.size ?: "") }
     var costPriceText by remember { mutableStateOf(existingProduct?.costPrice?.toString() ?: "") }
     var sellingPriceText by remember { mutableStateOf(existingProduct?.sellingPrice?.toString() ?: "") }
     var discountPercentText by remember {
@@ -674,6 +884,16 @@ private fun ProductFormSheetContent(
     var stockText by remember { mutableStateOf(existingProduct?.stock?.toString() ?: "10") }
     var minAlertText by remember { mutableStateOf(existingProduct?.minStockAlert?.toString() ?: "5") }
     var showSkuScanner by remember { mutableStateOf(false) }
+
+    val selectableCategories = remember(categories, categoryCode) {
+        if (categories.any { it.code.equals(categoryCode, ignoreCase = true) }) {
+            categories
+        } else if (categories.isEmpty()) {
+            listOf(StoreCategoryDoc.resolve(categoryCode, emptyList()))
+        } else {
+            categories + StoreCategoryDoc.resolve(categoryCode, emptyList())
+        }
+    }
 
     val costPrice = costPriceText.toLongOrNull() ?: 0L
     val sellingPrice = sellingPriceText.toLongOrNull() ?: 0L
@@ -699,15 +919,30 @@ private fun ProductFormSheetContent(
             style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
         )
 
-        Text(text = "Kategori Toko", style = MaterialTheme.typography.labelLarge)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(text = "Kategori Toko", style = MaterialTheme.typography.labelLarge)
+            TextButton(
+                onClick = onOpenCategoryManager,
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                modifier = Modifier.testTag("open_category_manager_in_form")
+            ) {
+                Icon(Icons.Rounded.Category, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("Tambah / Kurangi", style = MaterialTheme.typography.labelMedium)
+            }
+        }
         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(ProductCategory.entries) { item ->
+            items(selectableCategories, key = { it.code }) { item ->
                 FilterChip(
-                    selected = category == item,
+                    selected = categoryCode.equals(item.code, ignoreCase = true),
                     onClick = {
-                        category = item
+                        categoryCode = item.code
                         if (existingProduct == null && initialSku == null) {
-                            skuCode = generateNextSku(item)
+                            skuCode = generateNextSku(item.code)
                         }
                     },
                     label = { Text(item.displayName) }
@@ -732,7 +967,7 @@ private fun ProductFormSheetContent(
             IconButton(onClick = { showSkuScanner = true }) {
                 Icon(Icons.Rounded.QrCodeScanner, contentDescription = "Scan barcode/QR")
             }
-            IconButton(onClick = { skuCode = generateNextSku(category) }) {
+            IconButton(onClick = { skuCode = generateNextSku(categoryCode) }) {
                 Icon(Icons.Rounded.AutoAwesome, contentDescription = "Generate kode otomatis")
             }
         }
@@ -748,14 +983,158 @@ private fun ProductFormSheetContent(
                 .testTag("product_name_input")
         )
 
-        OutlinedTextField(
-            value = variantInfo,
-            onValueChange = { variantInfo = it },
-            label = { Text("Varian / Ukuran / Penulis (Opsional)") },
-            placeholder = { Text("Misal: Ukuran L • Sage Green") },
-            singleLine = true,
+        Surface(
+            shape = MaterialTheme.shapes.medium,
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            border = BorderStroke(
+                1.dp,
+                if (includeAttributes) MaterialTheme.colorScheme.primary.copy(alpha = 0.55f)
+                else MaterialTheme.colorScheme.outlineVariant
+            ),
             modifier = Modifier.fillMaxWidth()
-        )
+        ) {
+            Column(
+                modifier = Modifier.padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Tune,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Column {
+                            Text(
+                                text = "Opsi Varian, Warna & Ukuran",
+                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold)
+                            )
+                            Text(
+                                text = if (includeAttributes) {
+                                    "Aktif • Isi keterangan sesuai barang"
+                                } else {
+                                    "Opsional • Aktifkan untuk tambah varian/warna/ukuran"
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    Switch(
+                        checked = includeAttributes,
+                        onCheckedChange = { includeAttributes = it },
+                        modifier = Modifier.testTag("toggle_product_attributes_switch")
+                    )
+                }
+
+                AnimatedVisibility(visible = includeAttributes) {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        HorizontalDivider()
+
+                        OutlinedTextField(
+                            value = variantName,
+                            onValueChange = { variantName = it },
+                            label = { Text("Keterangan Varian / Motif (Opsional)") },
+                            placeholder = { Text("Misal: Polos, Motif Bunga, Hardcover") },
+                            singleLine = true,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("product_variant_input")
+                        )
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            listOf("Polos", "Motif", "Bordir", "Hardcover", "Travel").forEach { preset ->
+                                item {
+                                    FilterChip(
+                                        selected = variantName.equals(preset, ignoreCase = true),
+                                        onClick = {
+                                            variantName = if (variantName.equals(preset, ignoreCase = true)) "" else preset
+                                        },
+                                        label = { Text(preset) }
+                                    )
+                                }
+                            }
+                        }
+
+                        OutlinedTextField(
+                            value = productColor,
+                            onValueChange = { productColor = it },
+                            label = { Text("Warna (Opsional)") },
+                            placeholder = { Text("Misal: Sage Green, Hitam, Putih") },
+                            singleLine = true,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("product_color_input")
+                        )
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            listOf("Hitam", "Putih", "Navy", "Sage Green", "Mocca", "Maroon").forEach { preset ->
+                                item {
+                                    FilterChip(
+                                        selected = productColor.equals(preset, ignoreCase = true),
+                                        onClick = {
+                                            productColor = if (productColor.equals(preset, ignoreCase = true)) "" else preset
+                                        },
+                                        label = { Text(preset) }
+                                    )
+                                }
+                            }
+                        }
+
+                        OutlinedTextField(
+                            value = productSize,
+                            onValueChange = { productSize = it },
+                            label = { Text("Ukuran (Opsional)") },
+                            placeholder = { Text("Misal: S, M, L, XL, All Size, A5") },
+                            singleLine = true,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("product_size_input")
+                        )
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            listOf("S", "M", "L", "XL", "XXL", "All Size", "Dewasa", "Anak").forEach { preset ->
+                                item {
+                                    FilterChip(
+                                        selected = productSize.equals(preset, ignoreCase = true),
+                                        onClick = {
+                                            productSize = if (productSize.equals(preset, ignoreCase = true)) "" else preset
+                                        },
+                                        label = { Text(preset) }
+                                    )
+                                }
+                            }
+                        }
+
+                        val previewSummary = ProductDoc.composeVariantSummary(
+                            variantName = variantName,
+                            color = productColor,
+                            size = productSize
+                        )
+                        if (previewSummary.isNotBlank()) {
+                            Surface(
+                                shape = MaterialTheme.shapes.small,
+                                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    text = "Preview: $previewSummary",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -913,12 +1292,23 @@ private fun ProductFormSheetContent(
             Spacer(Modifier.width(8.dp))
             Button(
                 onClick = {
+                    val effectiveVariant = if (includeAttributes) variantName.trim() else ""
+                    val effectiveColor = if (includeAttributes) productColor.trim() else ""
+                    val effectiveSize = if (includeAttributes) productSize.trim() else ""
+                    val effectiveSummary = ProductDoc.composeVariantSummary(
+                        variantName = effectiveVariant,
+                        color = effectiveColor,
+                        size = effectiveSize
+                    )
                     onSave(
                         existingProduct,
                         skuCode,
                         name,
-                        category,
-                        variantInfo,
+                        categoryCode,
+                        effectiveVariant,
+                        effectiveColor,
+                        effectiveSize,
+                        effectiveSummary,
                         costPrice,
                         sellingPrice,
                         discountPct,
@@ -1105,109 +1495,6 @@ private fun ProductQrPreviewDialog(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text("Tutup")
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun StockHistoryDialog(
-    histories: List<StockHistoryDoc>,
-    onDismiss: () -> Unit
-) {
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(
-            shape = MaterialTheme.shapes.extraLarge,
-            color = MaterialTheme.colorScheme.surface
-        ) {
-            Column(
-                modifier = Modifier.padding(18.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Icon(Icons.Rounded.Inventory2, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                        Text(
-                            text = "Riwayat Pergerakan Stok",
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
-                        )
-                    }
-                }
-                HorizontalDivider()
-                if (histories.isEmpty()) {
-                    Text(
-                        text = "Belum ada catatan pergerakan stok.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(vertical = 20.dp)
-                    )
-                } else {
-                    LazyColumn(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 360.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        items(histories, key = { it.id }) { log ->
-                            val isPositive = log.quantityDelta >= 0
-                            Surface(
-                                shape = MaterialTheme.shapes.small,
-                                color = MaterialTheme.colorScheme.surfaceContainerLow
-                            ) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(10.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            text = log.productName,
-                                            style = MaterialTheme.typography.titleSmall,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                        Text(
-                                            text = "${log.changeTypeEnum.displayName} • ${log.actorName}",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                        Text(
-                                            text = "${DateUtils.formatDateTime(log.timestampMillis)}${if (log.note.isNotBlank()) " • ${log.note}" else ""}",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                    Column(horizontalAlignment = Alignment.End) {
-                                        Text(
-                                            text = if (isPositive) "+${log.quantityDelta}" else "${log.quantityDelta}",
-                                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                                            color = if (isPositive) ProfitGreen else DangerCrimson
-                                        )
-                                        Text(
-                                            text = "Sisa: ${log.stockAfter}",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    Button(onClick = onDismiss) {
-                        Text("Tutup")
-                    }
                 }
             }
         }

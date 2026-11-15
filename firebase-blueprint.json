@@ -71,8 +71,11 @@
       "properties": {
         "skuCode": { "type": "string" },
         "name": { "type": "string" },
-        "category": { "type": "string", "enum": ["BAJU", "BUKU", "KEBUTUHAN_MUSLIM", "AKSESORIS"] },
+        "category": { "type": "string", "description": "Kode kategori barang (default atau kategori kustom toko)" },
         "variantInfo": { "type": "string" },
+        "variantName": { "type": "string", "description": "Keterangan varian / motif / edisi produk (opsional)" },
+        "color": { "type": "string", "description": "Warna produk (opsional)" },
+        "size": { "type": "string", "description": "Ukuran produk (opsional)" },
         "costPrice": { "type": "integer" },
         "sellingPrice": { "type": "integer" },
         "discountPercent": { "type": "integer" },
@@ -120,6 +123,7 @@
         "productId": { "type": "string" },
         "skuCode": { "type": "string" },
         "productName": { "type": "string" },
+        "variantSummary": { "type": "string", "description": "Snapshot keterangan varian, warna, dan ukuran saat terjual (opsional)" },
         "categoryName": { "type": "string" },
         "quantity": { "type": "integer" },
         "unitCostPrice": { "type": "integer" },
@@ -150,6 +154,20 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["productId", "productName", "changeType", "quantityDelta", "stockAfter", "unitCostAtChange", "actorName", "actorUid", "timestampMillis", "createdAt"]
+    },
+    "StoreCategory": {
+      "title": "StoreCategory",
+      "description": "Kategori produk toko yang dapat ditambah, diubah, atau dikurangi oleh Owner.",
+      "type": "object",
+      "properties": {
+        "code": { "type": "string" },
+        "displayName": { "type": "string" },
+        "codePrefix": { "type": "string" },
+        "colorIndex": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["code", "displayName", "codePrefix", "colorIndex", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -164,6 +182,10 @@
     "/stores/{storeId}/staff_pins/{staffId}": {
       "schema": { "$ref": "#/entities/StaffPinProfile" },
       "description": "Profil PIN Owner dan Kasir per toko"
+    },
+    "/stores/{storeId}/categories/{categoryId}": {
+      "schema": { "$ref": "#/entities/StoreCategory" },
+      "description": "Daftar kategori barang toko (dapat ditambah & dihapus Owner)"
     },
     "/stores/{storeId}/products/{productId}": {
       "schema": { "$ref": "#/entities/Product" },

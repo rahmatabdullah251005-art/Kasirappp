@@ -12,6 +12,7 @@ data class SoldItemSummary(
     val productId: String,
     val skuCode: String,
     val productName: String,
+    val variantSummary: String = "",
     val categoryName: String,
     val totalQuantity: Int,
     val unitPrice: Long,
@@ -20,13 +21,71 @@ data class SoldItemSummary(
     val totalProfit: Long
 )
 
+data class BestSellerItemSummary(
+    val productId: String,
+    val skuCode: String,
+    val productName: String,
+    val variantSummary: String = "",
+    val categoryName: String,
+    val totalQuantity: Int,
+    val transactionCount: Int,
+    val totalRevenue: Long,
+    val totalProfit: Long
+)
+
 object ReportExporter {
+
+    fun aggregateBestSellers(
+        transactions: List<CloudSaleWithItems>,
+        limit: Int = 5,
+        sortByRevenue: Boolean = false
+    ): List<BestSellerItemSummary> {
+        val groupedItems = mutableMapOf<String, MutableList<SaleItemDoc>>()
+        val txIdsPerKey = mutableMapOf<String, MutableSet<String>>()
+        transactions.forEach { sale ->
+            val txId = sale.transaction.id.ifBlank { sale.transaction.invoiceNumber }
+            sale.items.forEach { item ->
+                val baseKey = item.productId.ifBlank { "${item.skuCode}_${item.productName}" }
+                val key = "${baseKey}_${item.variantSummary}"
+                groupedItems.getOrPut(key) { mutableListOf() }.add(item)
+                txIdsPerKey.getOrPut(key) { mutableSetOf() }.add(txId)
+            }
+        }
+        val summaries = groupedItems.entries.map { (key, list) ->
+            val first = list.first()
+            BestSellerItemSummary(
+                productId = first.productId,
+                skuCode = first.skuCode,
+                productName = first.productName,
+                variantSummary = first.variantSummary,
+                categoryName = first.categoryName,
+                totalQuantity = list.sumOf { it.quantity },
+                transactionCount = txIdsPerKey[key]?.size ?: list.size,
+                totalRevenue = list.sumOf { it.subtotalRevenue },
+                totalProfit = list.sumOf { it.subtotalProfit }
+            )
+        }
+        val sorted = if (sortByRevenue) {
+            summaries.sortedWith(
+                compareByDescending<BestSellerItemSummary> { it.totalRevenue }
+                    .thenByDescending { it.totalQuantity }
+                    .thenBy { it.productName.lowercase() }
+            )
+        } else {
+            summaries.sortedWith(
+                compareByDescending<BestSellerItemSummary> { it.totalQuantity }
+                    .thenByDescending { it.totalRevenue }
+                    .thenBy { it.productName.lowercase() }
+            )
+        }
+        return sorted.take(limit.coerceAtLeast(1))
+    }
 
     fun aggregateSoldItems(transactions: List<CloudSaleWithItems>): List<SoldItemSummary> {
         val grouped = mutableMapOf<String, MutableList<SaleItemDoc>>()
         transactions.forEach { tx ->
             tx.items.forEach { item ->
-                val key = "${item.productId}_${item.unitSellingPrice}_${item.unitCostPrice}"
+                val key = "${item.productId}_${item.variantSummary}_${item.unitSellingPrice}_${item.unitCostPrice}"
                 grouped.getOrPut(key) { mutableListOf() }.add(item)
             }
         }
@@ -36,6 +95,7 @@ object ReportExporter {
                 productId = first.productId,
                 skuCode = first.skuCode,
                 productName = first.productName,
+                variantSummary = first.variantSummary,
                 categoryName = first.categoryName,
                 totalQuantity = list.sumOf { it.quantity },
                 unitPrice = first.unitSellingPrice,
@@ -58,6 +118,7 @@ object ReportExporter {
         val totalItems = transactions.sumOf { it.transaction.totalItems }
         val marginPercent = if (totalRevenue > 0L) (totalProfit.toDouble() / totalRevenue.toDouble()) * 100.0 else 0.0
         val soldItems = aggregateSoldItems(transactions)
+        val bestSellers = aggregateBestSellers(transactions, limit = 5)
 
         val sb = StringBuilder()
         sb.appendLine("================================================")
@@ -85,13 +146,23 @@ object ReportExporter {
             val sum = methodTxs.sumOf { it.transaction.finalRevenue }
             sb.appendLine("  %-10s : %3d trx | %s".format(method.displayName, methodTxs.size, CurrencyFormatter.formatRupiah(sum)))
         }
+        if (bestSellers.isNotEmpty()) {
+            sb.appendLine("------------------------------------------------")
+            sb.appendLine("BARANG BEST SELLER (TERLARIS)")
+            bestSellers.forEachIndexed { idx, item ->
+                val varSuffix = if (item.variantSummary.isNotBlank()) " (${item.variantSummary})" else ""
+                sb.appendLine("  #${idx + 1} ${item.productName}$varSuffix")
+                sb.appendLine("     Terjual: ${item.totalQuantity} pcs (${item.transactionCount} trx) | Omzet: ${CurrencyFormatter.formatRupiah(item.totalRevenue)} | Untung: ${CurrencyFormatter.formatRupiah(item.totalProfit)}")
+            }
+        }
         sb.appendLine("------------------------------------------------")
         sb.appendLine("DAFTAR ITEM TERJUAL")
         if (soldItems.isEmpty()) {
             sb.appendLine("  (Belum ada item terjual pada periode ini)")
         } else {
             soldItems.forEachIndexed { idx, item ->
-                sb.appendLine("${idx + 1}. ${item.productName} [${item.skuCode}]")
+                val varSuffix = if (item.variantSummary.isNotBlank()) " (${item.variantSummary})" else ""
+                sb.appendLine("${idx + 1}. ${item.productName}$varSuffix [${item.skuCode}]")
                 sb.appendLine("   Kategori : ${item.categoryName}")
                 sb.appendLine("   Qty      : ${item.totalQuantity} x ${CurrencyFormatter.formatRupiah(item.unitPrice)} = ${CurrencyFormatter.formatRupiah(item.totalRevenue)}")
                 sb.appendLine("   Modal    : ${CurrencyFormatter.formatRupiah(item.totalCost)} | Untung: ${CurrencyFormatter.formatRupiah(item.totalProfit)}")
@@ -104,7 +175,8 @@ object ReportExporter {
         } else {
             transactions.forEach { txWithItems ->
                 val tx = txWithItems.transaction
-                sb.appendLine("- ${tx.invoiceNumber} | ${DateUtils.formatDateTime(tx.timestampMillis)} | ${tx.cashierName} (${tx.cashierRoleEnum.displayName})")
+                val custTag = if (tx.customerName.isNotBlank()) " | Pelanggan: ${tx.customerName}" else ""
+                sb.appendLine("- ${tx.invoiceNumber} | ${DateUtils.formatDateTime(tx.timestampMillis)} | ${tx.cashierName} (${tx.cashierRoleEnum.displayName})$custTag")
                 sb.appendLine("  Bayar: ${tx.paymentMethodEnum.displayName} | Omzet: ${CurrencyFormatter.formatRupiah(tx.finalRevenue)} | Modal: ${CurrencyFormatter.formatRupiah(tx.totalCost)} | Untung: ${CurrencyFormatter.formatRupiah(tx.netProfit)}")
             }
         }
@@ -132,7 +204,7 @@ object ReportExporter {
         sb.appendLine("Total Modal (Rp),$totalCost")
         sb.appendLine("Total Keuntungan Bersih (Rp),$totalProfit")
         sb.appendLine()
-        sb.appendLine("No Invoice,Tanggal & Jam,Kasir,Peran,Metode Bayar,Kode QR/SKU,Nama Barang,Kategori,Qty,Harga Satuan (Rp),Modal Satuan (Rp),Subtotal Pendapatan (Rp),Subtotal Modal (Rp),Keuntungan (Rp),Diskon Transaksi (Rp)")
+        sb.appendLine("No Invoice,Tanggal & Jam,Kasir,Peran,Metode Bayar,Kode QR/SKU,Nama Barang,Varian/Warna/Ukuran,Kategori,Qty,Harga Satuan (Rp),Modal Satuan (Rp),Subtotal Pendapatan (Rp),Subtotal Modal (Rp),Keuntungan (Rp),Diskon Transaksi (Rp)")
 
         transactions.forEach { txWithItems ->
             val tx = txWithItems.transaction
@@ -147,6 +219,7 @@ object ReportExporter {
                         escapeCsv(tx.paymentMethodEnum.displayName),
                         escapeCsv(item.skuCode),
                         escapeCsv(item.productName),
+                        escapeCsv(item.variantSummary),
                         escapeCsv(item.categoryName),
                         item.quantity.toString(),
                         item.unitSellingPrice.toString(),
@@ -175,9 +248,15 @@ object ReportExporter {
         sb.appendLine("No. Struk : ${tx.invoiceNumber}")
         sb.appendLine("Tanggal   : ${DateUtils.formatDateTime(tx.timestampMillis)}")
         sb.appendLine("Kasir     : ${tx.cashierName}")
+        if (tx.customerName.isNotBlank()) {
+            sb.appendLine("Pelanggan : ${tx.customerName}")
+        }
         sb.appendLine("--------------------------------")
         receipt.items.forEach { item ->
             sb.appendLine("• ${item.productName}")
+            if (item.variantSummary.isNotBlank()) {
+                sb.appendLine("  _${item.variantSummary}_")
+            }
             sb.appendLine("  ${item.quantity} x ${CurrencyFormatter.formatRupiah(item.unitSellingPrice)} = ${CurrencyFormatter.formatRupiah(item.subtotalRevenue)}")
         }
         sb.appendLine("--------------------------------")
@@ -199,6 +278,140 @@ object ReportExporter {
         }
         sb.appendLine("--------------------------------")
         sb.append("Jazakumullahu khairan telah berbelanja di $effectiveStore.")
+        return sb.toString()
+    }
+
+    fun buildCashierShiftRecapText(
+        storeName: String,
+        cashierName: String,
+        periodLabel: String,
+        transactions: List<CloudSaleWithItems>
+    ): String {
+        val effectiveStore = storeName.ifBlank { "UM TAZKIYAH" }
+        val totalRevenue = transactions.sumOf { it.transaction.finalRevenue }
+        val totalGrossRevenue = transactions.sumOf { it.transaction.totalRevenue }
+        val totalDiscount = transactions.sumOf { it.transaction.discountAmount }
+        val totalItems = transactions.sumOf { it.transaction.totalItems }
+        val soldItems = aggregateSoldItems(transactions)
+        val bestSellers = aggregateBestSellers(transactions, limit = 5)
+
+        val sb = StringBuilder()
+        sb.appendLine("*REKAP TRANSAKSI PEGAWAI - $effectiveStore*")
+        sb.appendLine("Petugas : $cashierName")
+        sb.appendLine("Tanggal : $periodLabel")
+        sb.appendLine("Dikirim : ${DateUtils.formatDateTime(System.currentTimeMillis())}")
+        sb.appendLine("--------------------------------")
+        sb.appendLine("RINGKASAN SHIFT")
+        sb.appendLine("• Jumlah Transaksi : ${transactions.size} transaksi")
+        sb.appendLine("• Total Terjual    : $totalItems pcs")
+        if (totalDiscount > 0L) {
+            sb.appendLine("• Subtotal Kotor   : ${CurrencyFormatter.formatRupiah(totalGrossRevenue)}")
+            sb.appendLine("• Total Diskon     : -${CurrencyFormatter.formatRupiah(totalDiscount)}")
+        }
+        sb.appendLine("• *Total Omzet     : ${CurrencyFormatter.formatRupiah(totalRevenue)}*")
+        sb.appendLine("--------------------------------")
+        sb.appendLine("RINCIAN METODE BAYAR")
+        PaymentMethod.entries.forEach { method ->
+            val matching = transactions.filter { it.transaction.paymentMethodEnum == method }
+            val sum = matching.sumOf { it.transaction.finalRevenue }
+            sb.appendLine("• ${method.displayName} (${matching.size}x) : ${CurrencyFormatter.formatRupiah(sum)}")
+        }
+        if (bestSellers.isNotEmpty()) {
+            sb.appendLine("--------------------------------")
+            sb.appendLine("BARANG BEST SELLER SHIFT")
+            bestSellers.forEachIndexed { idx, item ->
+                val varSuffix = if (item.variantSummary.isNotBlank()) " (${item.variantSummary})" else ""
+                sb.appendLine("#${idx + 1} ${item.productName}$varSuffix — ${item.totalQuantity} pcs (${CurrencyFormatter.formatRupiah(item.totalRevenue)})")
+            }
+        }
+        if (soldItems.isNotEmpty()) {
+            sb.appendLine("--------------------------------")
+            sb.appendLine("BARANG TERJUAL")
+            soldItems.forEachIndexed { idx, item ->
+                val varSuffix = if (item.variantSummary.isNotBlank()) " (${item.variantSummary})" else ""
+                sb.appendLine("${idx + 1}. ${item.productName}$varSuffix")
+                sb.appendLine("   ${item.totalQuantity} x ${CurrencyFormatter.formatRupiah(item.unitPrice)} = ${CurrencyFormatter.formatRupiah(item.totalRevenue)}")
+            }
+        }
+        sb.appendLine("--------------------------------")
+        sb.appendLine("DAFTAR INVOICE")
+        if (transactions.isEmpty()) {
+            sb.appendLine("(Belum ada transaksi pada periode ini)")
+        } else {
+            transactions.forEach { txWithItems ->
+                val tx = txWithItems.transaction
+                val custTag = if (tx.customerName.isNotBlank()) " • Plg: ${tx.customerName}" else ""
+                sb.appendLine("• ${tx.invoiceNumber} (${DateUtils.formatTime(tx.timestampMillis)})")
+                sb.appendLine("  ${tx.paymentMethodEnum.displayName} • ${tx.totalItems} pcs • ${CurrencyFormatter.formatRupiah(tx.finalRevenue)}$custTag")
+            }
+        }
+        return sb.toString().trimEnd()
+    }
+
+    fun buildCashierShiftRecapCsv(
+        storeName: String,
+        cashierName: String,
+        periodLabel: String,
+        transactions: List<CloudSaleWithItems>
+    ): String {
+        val effectiveStore = storeName.ifBlank { "UM TAZKIYAH" }
+        val totalRevenue = transactions.sumOf { it.transaction.finalRevenue }
+        val totalItems = transactions.sumOf { it.transaction.totalItems }
+
+        val sb = StringBuilder()
+        sb.append('\uFEFF')
+        sb.appendLine("Rekap Transaksi Pegawai - ${escapeCsv(effectiveStore)}")
+        sb.appendLine("Petugas,\"${escapeCsv(cashierName)}\"")
+        sb.appendLine("Tanggal,\"${escapeCsv(periodLabel)}\"")
+        sb.appendLine("Jumlah Transaksi,${transactions.size}")
+        sb.appendLine("Total Barang Terjual,$totalItems")
+        sb.appendLine("Total Omzet (Rp),$totalRevenue")
+        sb.appendLine()
+        sb.appendLine("No Invoice,Tanggal & Jam,Kasir,Pelanggan,Metode Bayar,Kode QR/SKU,Nama Barang,Varian/Warna/Ukuran,Kategori,Qty,Harga Satuan (Rp),Subtotal (Rp),Diskon Transaksi (Rp)")
+
+        transactions.forEach { txWithItems ->
+            val tx = txWithItems.transaction
+            val timeStr = DateUtils.formatDateTime(tx.timestampMillis)
+            if (txWithItems.items.isEmpty()) {
+                sb.appendLine(
+                    listOf(
+                        escapeCsv(tx.invoiceNumber),
+                        escapeCsv(timeStr),
+                        escapeCsv(tx.cashierName),
+                        escapeCsv(tx.customerName),
+                        escapeCsv(tx.paymentMethodEnum.displayName),
+                        "\"\"",
+                        "\"\"",
+                        "\"\"",
+                        "\"\"",
+                        tx.totalItems.toString(),
+                        "0",
+                        tx.finalRevenue.toString(),
+                        tx.discountAmount.toString()
+                    ).joinToString(",")
+                )
+            } else {
+                txWithItems.items.forEach { item ->
+                    sb.appendLine(
+                        listOf(
+                            escapeCsv(tx.invoiceNumber),
+                            escapeCsv(timeStr),
+                            escapeCsv(tx.cashierName),
+                            escapeCsv(tx.customerName),
+                            escapeCsv(tx.paymentMethodEnum.displayName),
+                            escapeCsv(item.skuCode),
+                            escapeCsv(item.productName),
+                            escapeCsv(item.variantSummary),
+                            escapeCsv(item.categoryName),
+                            item.quantity.toString(),
+                            item.unitSellingPrice.toString(),
+                            item.subtotalRevenue.toString(),
+                            tx.discountAmount.toString()
+                        ).joinToString(",")
+                    )
+                }
+            }
+        }
         return sb.toString()
     }
 

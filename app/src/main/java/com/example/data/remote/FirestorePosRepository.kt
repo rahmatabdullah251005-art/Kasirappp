@@ -196,6 +196,20 @@ class FirestorePosRepository(
                     )
                 )
             }
+            StoreCategoryDoc.defaultPresets().forEach { cat ->
+                val catRef = storeRef.collection("categories").document(cat.id)
+                batch.set(
+                    catRef,
+                    mapOf(
+                        "code" to cat.code,
+                        "displayName" to cat.displayName,
+                        "codePrefix" to cat.codePrefix,
+                        "colorIndex" to cat.colorIndex,
+                        "createdAt" to FieldValue.serverTimestamp(),
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+            }
             batch.commit().await()
             StoreDoc(
                 id = storeId,
@@ -415,6 +429,128 @@ class FirestorePosRepository(
         }
     }
 
+    // --- CATEGORIES ---
+
+    fun observeCategories(storeId: String): Flow<List<StoreCategoryDoc>> = flow {
+        val uid = requireUserId()
+        val path = "stores/$storeId/categories"
+        emitAll(
+            db.collection("stores").document(storeId).collection("categories")
+                .snapshots()
+                .map { snap ->
+                    snap.toObjects(StoreCategoryDoc::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                        .sortedBy { it.displayName.lowercase() }
+                }
+                .handleStreamErrors(OperationType.LIST, path, uid)
+        )
+    }
+
+    suspend fun createCategory(
+        storeId: String,
+        displayName: String,
+        customPrefix: String = "",
+        colorIndex: Int? = null
+    ): Result<StoreCategoryDoc> = runCatching {
+        requireUserId()
+        val cleanName = displayName.trim()
+        require(cleanName.isNotBlank()) { "Nama kategori tidak boleh kosong" }
+        require(cleanName.length <= 60) { "Nama kategori maksimal 60 karakter" }
+
+        val col = db.collection("stores").document(storeId).collection("categories")
+        val existingSnap = col.get().await()
+        val existingDocs = existingSnap.toObjects(StoreCategoryDoc::class.java)
+        require(existingDocs.none { it.displayName.equals(cleanName, ignoreCase = true) }) {
+            "Kategori '$cleanName' sudah ada"
+        }
+
+        val baseCode = StoreCategoryDoc.normalizeCode(cleanName)
+        var candidateCode = baseCode
+        var suffix = 2
+        while (existingDocs.any { it.code.equals(candidateCode, ignoreCase = true) }) {
+            candidateCode = "${baseCode.take(42)}_$suffix"
+            suffix++
+        }
+
+        val cleanPrefix = customPrefix.trim().uppercase()
+            .replace(Regex("[^A-Z0-9]"), "")
+            .take(6)
+            .ifBlank { StoreCategoryDoc.suggestPrefix(cleanName) }
+        val resolvedColor = (colorIndex ?: existingDocs.size) % 6
+        val docId = "cat_${candidateCode.lowercase()}"
+        val docRef = col.document(docId)
+
+        try {
+            docRef.set(
+                mapOf(
+                    "code" to candidateCode,
+                    "displayName" to cleanName,
+                    "codePrefix" to cleanPrefix,
+                    "colorIndex" to resolvedColor,
+                    "createdAt" to FieldValue.serverTimestamp(),
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            ).await()
+            StoreCategoryDoc(
+                id = docId,
+                code = candidateCode,
+                displayName = cleanName,
+                codePrefix = cleanPrefix,
+                colorIndex = resolvedColor
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.CREATE, docRef.path)
+            throw e
+        }
+    }
+
+    suspend fun deleteCategory(storeId: String, categoryId: String): Result<Unit> = runCatching {
+        requireUserId()
+        require(categoryId.isNotBlank()) { "ID kategori tidak valid" }
+        val docRef = db.collection("stores").document(storeId).collection("categories").document(categoryId)
+        try {
+            docRef.delete().await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.DELETE, docRef.path)
+            throw e
+        }
+    }
+
+    suspend fun seedDefaultCategoriesIfEmpty(storeId: String): Result<Int> = runCatching {
+        requireUserId()
+        val col = db.collection("stores").document(storeId).collection("categories")
+        val existing = col.limit(1).get().await()
+        if (!existing.isEmpty) return@runCatching 0
+
+        val presets = StoreCategoryDoc.defaultPresets()
+        val batch = db.batch()
+        presets.forEach { cat ->
+            batch.set(
+                col.document(cat.id),
+                mapOf(
+                    "code" to cat.code,
+                    "displayName" to cat.displayName,
+                    "codePrefix" to cat.codePrefix,
+                    "colorIndex" to cat.colorIndex,
+                    "createdAt" to FieldValue.serverTimestamp(),
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            )
+        }
+        try {
+            batch.commit().await()
+            presets.size
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, col.path)
+            throw e
+        }
+    }
+
     // --- PRODUCTS & STOCK ---
 
     fun observeProducts(storeId: String): Flow<List<ProductDoc>> = flow {
@@ -450,8 +586,11 @@ class FirestorePosRepository(
         existingProduct: ProductDoc?,
         skuCode: String,
         name: String,
-        category: ProductCategory,
-        variantInfo: String,
+        categoryCode: String,
+        variantInfo: String = "",
+        variantName: String = "",
+        color: String = "",
+        size: String = "",
         costPrice: Long,
         sellingPrice: Long,
         discountPercent: Int = 0,
@@ -462,6 +601,16 @@ class FirestorePosRepository(
         val uid = requireUserId()
         val cleanSku = skuCode.trim().uppercase()
         val cleanName = name.trim()
+        val cleanCategory = categoryCode.trim().ifBlank { ProductCategory.BAJU.name }
+        val cleanVariantName = variantName.trim().take(80)
+        val cleanColor = color.trim().take(60)
+        val cleanSize = size.trim().take(60)
+        val cleanVariantInfo = ProductDoc.composeVariantSummary(
+            variantName = cleanVariantName,
+            color = cleanColor,
+            size = cleanSize,
+            legacyVariantInfo = variantInfo
+        )
         val clampedDiscount = discountPercent.coerceIn(0, 99)
         require(cleanSku.isNotBlank()) { "Kode QR / SKU tidak boleh kosong" }
         require(cleanName.isNotBlank()) { "Nama barang tidak boleh kosong" }
@@ -488,8 +637,11 @@ class FirestorePosRepository(
             val payload = buildMap<String, Any> {
                 put("skuCode", cleanSku)
                 put("name", cleanName)
-                put("category", category.name)
-                if (variantInfo.trim().isNotBlank()) put("variantInfo", variantInfo.trim())
+                put("category", cleanCategory)
+                if (cleanVariantInfo.isNotBlank()) put("variantInfo", cleanVariantInfo)
+                if (cleanVariantName.isNotBlank()) put("variantName", cleanVariantName)
+                if (cleanColor.isNotBlank()) put("color", cleanColor)
+                if (cleanSize.isNotBlank()) put("size", cleanSize)
                 put("costPrice", costPrice)
                 put("sellingPrice", sellingPrice)
                 put("discountPercent", clampedDiscount)
@@ -521,8 +673,11 @@ class FirestorePosRepository(
             val payload = buildMap<String, Any> {
                 put("skuCode", cleanSku)
                 put("name", cleanName)
-                put("category", category.name)
-                put("variantInfo", variantInfo.trim())
+                put("category", cleanCategory)
+                put("variantInfo", cleanVariantInfo)
+                put("variantName", cleanVariantName)
+                put("color", cleanColor)
+                put("size", cleanSize)
                 put("costPrice", costPrice)
                 put("sellingPrice", sellingPrice)
                 put("discountPercent", clampedDiscount)
@@ -559,8 +714,11 @@ class FirestorePosRepository(
                 id = targetDocRef.id,
                 skuCode = cleanSku,
                 name = cleanName,
-                category = category.name,
-                variantInfo = variantInfo.trim(),
+                category = cleanCategory,
+                variantInfo = cleanVariantInfo,
+                variantName = cleanVariantName,
+                color = cleanColor,
+                size = cleanSize,
                 costPrice = costPrice,
                 sellingPrice = sellingPrice,
                 discountPercent = clampedDiscount,
@@ -658,6 +816,74 @@ class FirestorePosRepository(
         }
     }
 
+    /**
+     * Penambahan atau pengurangan stok oleh Pegawai Kasir maupun Owner.
+     * Hanya mengubah field `stock` & `updatedAt` pada dokumen produk sehingga harga modal/jual tetap terkunci oleh Security Rules.
+     */
+    suspend fun adjustProductStock(
+        storeId: String,
+        product: ProductDoc,
+        isAddition: Boolean,
+        quantity: Int,
+        actorName: String,
+        note: String,
+        includeUnitCost: Boolean = false
+    ): Result<Int> = runCatching {
+        val uid = requireUserId()
+        require(quantity > 0) { "Jumlah perubahan stok harus lebih dari 0" }
+
+        val now = System.currentTimeMillis()
+        val prodRef = db.collection("stores").document(storeId).collection("products").document(product.id)
+        val histRef = db.collection("stores").document(storeId).collection("stock_histories").document()
+        val delta = if (isAddition) quantity else -quantity
+        val changeType = if (isAddition) StockChangeType.RESTOK else StockChangeType.KOREKSI
+        val resolvedNote = note.trim().ifBlank {
+            if (isAddition) "Penambahan stok barang" else "Pengurangan / koreksi stok"
+        }
+
+        try {
+            db.runTransaction { tx ->
+                val snap = tx.get(prodRef)
+                val currentStock = (snap.getLong("stock") ?: 0L).toInt()
+                if (!isAddition && currentStock < quantity) {
+                    throw IllegalArgumentException(
+                        "Stok ${product.name} hanya tersisa $currentStock pcs, tidak dapat dikurangi $quantity pcs"
+                    )
+                }
+                val newStock = currentStock + delta
+                tx.update(
+                    prodRef,
+                    mapOf(
+                        "stock" to newStock,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+                tx.set(
+                    histRef,
+                    mapOf(
+                        "productId" to product.id,
+                        "productName" to product.name,
+                        "changeType" to changeType.name,
+                        "quantityDelta" to delta,
+                        "stockAfter" to newStock,
+                        "unitCostAtChange" to if (includeUnitCost) product.costPrice else 0L,
+                        "actorName" to actorName,
+                        "actorUid" to uid,
+                        "note" to resolvedNote,
+                        "timestampMillis" to now,
+                        "createdAt" to FieldValue.serverTimestamp()
+                    )
+                )
+                newStock
+            }.await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, prodRef.path)
+            throw e
+        }
+    }
+
     suspend fun deleteProduct(storeId: String, productId: String): Result<Unit> = runCatching {
         requireUserId()
         val docRef = db.collection("stores").document(storeId).collection("products").document(productId)
@@ -716,6 +942,35 @@ class FirestorePosRepository(
         )
     }
 
+    fun observeAllCashierOwnTransactions(storeId: String): Flow<List<SaleTransactionDoc>> = flow {
+        val uid = requireUserId()
+        val path = "stores/$storeId/transactions"
+        emitAll(
+            db.collection("stores").document(storeId).collection("transactions")
+                .whereEqualTo("cashierUid", uid)
+                .snapshots()
+                .map { snap ->
+                    snap.toObjects(SaleTransactionDoc::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                        .sortedByDescending { it.timestampMillis }
+                }
+                .handleStreamErrors(OperationType.LIST, path, uid)
+        )
+    }
+
+    fun observeCashierOwnSaleItems(storeId: String): Flow<List<SaleItemDoc>> = flow {
+        val uid = requireUserId()
+        val path = "stores/$storeId/sale_items"
+        emitAll(
+            db.collection("stores").document(storeId).collection("sale_items")
+                .whereEqualTo("cashierUid", uid)
+                .snapshots()
+                .map { snap ->
+                    snap.toObjects(SaleItemDoc::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                }
+                .handleStreamErrors(OperationType.LIST, path, uid)
+        )
+    }
+
     suspend fun checkoutSale(
         storeId: String,
         cartLines: List<CloudCartLineRequest>,
@@ -724,6 +979,7 @@ class FirestorePosRepository(
         amountPaid: Long,
         cashierName: String,
         cashierRole: UserRole,
+        customerName: String = "",
         notes: String,
         qrisReference: String
     ): Result<CloudSaleWithItems> = runCatching {
@@ -737,6 +993,10 @@ class FirestorePosRepository(
         val txRef = storeRef.collection("transactions").document()
         val shortSuffix = UUID.randomUUID().toString().take(4).uppercase()
         val invoiceNumber = "INV-${DateUtils.invoiceDatePrefix(now)}-$shortSuffix"
+        val storeCategories = runCatching {
+            storeRef.collection("categories").get().await()
+                .toObjects(StoreCategoryDoc::class.java)
+        }.getOrDefault(emptyList())
 
         try {
             db.runTransaction { transaction ->
@@ -808,6 +1068,7 @@ class FirestorePosRepository(
                     put("cashierUid", uid)
                     put("cashierName", cashierName)
                     put("cashierRole", cashierRole.name)
+                    if (customerName.trim().isNotBlank()) put("customerName", customerName.trim())
                     if (notes.trim().isNotBlank()) put("notes", notes.trim())
                     if (qrisReference.trim().isNotBlank()) put("qrisReference", qrisReference.trim())
                     put("createdAt", FieldValue.serverTimestamp())
@@ -820,23 +1081,26 @@ class FirestorePosRepository(
                     val itemRef = storeRef.collection("sale_items").document()
                     val lineRev = appliedUnitPrice * qty
                     val lineCost = product.costPrice * qty
-                    val itemPayload = mapOf(
-                        "transactionId" to txRef.id,
-                        "dateKey" to dateKey,
-                        "timestampMillis" to now,
-                        "productId" to product.id,
-                        "skuCode" to product.skuCode,
-                        "productName" to product.name,
-                        "categoryName" to product.categoryEnum.displayName,
-                        "quantity" to qty,
-                        "unitCostPrice" to product.costPrice,
-                        "unitSellingPrice" to appliedUnitPrice,
-                        "subtotalRevenue" to lineRev,
-                        "subtotalCost" to lineCost,
-                        "subtotalProfit" to (lineRev - lineCost),
-                        "cashierUid" to uid,
-                        "createdAt" to FieldValue.serverTimestamp()
-                    )
+                    val resolvedCatName = StoreCategoryDoc.resolve(product.category, storeCategories).displayName
+                    val variantSummary = product.resolvedVariantSummary
+                    val itemPayload = buildMap<String, Any> {
+                        put("transactionId", txRef.id)
+                        put("dateKey", dateKey)
+                        put("timestampMillis", now)
+                        put("productId", product.id)
+                        put("skuCode", product.skuCode)
+                        put("productName", product.name)
+                        if (variantSummary.isNotBlank()) put("variantSummary", variantSummary)
+                        put("categoryName", resolvedCatName)
+                        put("quantity", qty)
+                        put("unitCostPrice", product.costPrice)
+                        put("unitSellingPrice", appliedUnitPrice)
+                        put("subtotalRevenue", lineRev)
+                        put("subtotalCost", lineCost)
+                        put("subtotalProfit", (lineRev - lineCost))
+                        put("cashierUid", uid)
+                        put("createdAt", FieldValue.serverTimestamp())
+                    }
                     transaction.set(itemRef, itemPayload)
 
                     val histRef = storeRef.collection("stock_histories").document()
@@ -865,7 +1129,8 @@ class FirestorePosRepository(
                         productId = product.id,
                         skuCode = product.skuCode,
                         productName = product.name,
-                        categoryName = product.categoryEnum.displayName,
+                        variantSummary = variantSummary,
+                        categoryName = resolvedCatName,
                         quantity = qty,
                         unitCostPrice = product.costPrice,
                         unitSellingPrice = appliedUnitPrice,
@@ -894,6 +1159,7 @@ class FirestorePosRepository(
                         cashierUid = uid,
                         cashierName = cashierName,
                         cashierRole = cashierRole.name,
+                        customerName = customerName.trim(),
                         notes = notes.trim(),
                         qrisReference = qrisReference.trim()
                     ),
@@ -915,16 +1181,16 @@ class FirestorePosRepository(
             .get().await().documents.mapNotNull { it.getString("skuCode")?.uppercase() }.toSet()
 
         val starter = listOf(
-            ProductDoc(skuCode = "UMT-BJ-001", name = "Gamis Katun Toyobo Premium", category = ProductCategory.BAJU.name, variantInfo = "Ukuran M • Sage Green", costPrice = 135000L, sellingPrice = 195000L, stock = 14, minStockAlert = 4),
-            ProductDoc(skuCode = "UMT-BJ-002", name = "Baju Koko Kurta Linen", category = ProductCategory.BAJU.name, variantInfo = "Ukuran L • Putih Gading", costPrice = 95000L, sellingPrice = 145000L, stock = 18, minStockAlert = 5),
-            ProductDoc(skuCode = "UMT-BJ-003", name = "Khimar Ceruty 2 Layer", category = ProductCategory.BAJU.name, variantInfo = "All Size • Mocca", costPrice = 55000L, sellingPrice = 89000L, stock = 25, minStockAlert = 5),
-            ProductDoc(skuCode = "UMT-BK-001", name = "Sirah Nabawiyah Ar-Rahiq Al-Makhtum", category = ProductCategory.BUKU.name, variantInfo = "Hardcover • 680 Halaman", costPrice = 88000L, sellingPrice = 130000L, stock = 12, minStockAlert = 3),
-            ProductDoc(skuCode = "UMT-BK-002", name = "Al-Qur'an Terjemah Tajwid A5", category = ProductCategory.BUKU.name, variantInfo = "Cover Emas • Kertas QPP", costPrice = 62000L, sellingPrice = 95000L, stock = 20, minStockAlert = 5),
-            ProductDoc(skuCode = "UMT-BK-003", name = "Riyadhus Shalihin Terjemah Lengkap", category = ProductCategory.BUKU.name, variantInfo = "Hardcover • Darul Haq", costPrice = 75000L, sellingPrice = 115000L, stock = 9, minStockAlert = 3),
-            ProductDoc(skuCode = "UMT-KM-001", name = "Sajadah Turki Tebal Motif Kiswah", category = ProductCategory.KEBUTUHAN_MUSLIM.name, variantInfo = "70x110 cm • Emerald Gold", costPrice = 70000L, sellingPrice = 110000L, stock = 16, minStockAlert = 4),
-            ProductDoc(skuCode = "UMT-KM-002", name = "Mukena Silk Armani Travel Pouch", category = ProductCategory.KEBUTUHAN_MUSLIM.name, variantInfo = "Dewasa • Dusty Rose", costPrice = 140000L, sellingPrice = 215000L, stock = 10, minStockAlert = 3),
-            ProductDoc(skuCode = "UMT-KM-003", name = "Parfum Non-Alkohol Kasturi Kijang 12ml", category = ProductCategory.KEBUTUHAN_MUSLIM.name, variantInfo = "Botol Roll-On Kristal", costPrice = 22000L, sellingPrice = 45000L, stock = 30, minStockAlert = 6),
-            ProductDoc(skuCode = "UMT-AK-001", name = "Peci Rajut Yaman & Tasbih Kayu Kokka", category = ProductCategory.AKSESORIS.name, variantInfo = "Paket Hemat • 33 Butir", costPrice = 28000L, sellingPrice = 52000L, stock = 22, minStockAlert = 5)
+            ProductDoc(skuCode = "UMT-BJ-001", name = "Gamis Katun Toyobo Premium", category = ProductCategory.BAJU.name, variantName = "Polos", color = "Sage Green", size = "M", variantInfo = "Varian: Polos • Warna: Sage Green • Ukuran: M", costPrice = 135000L, sellingPrice = 195000L, stock = 14, minStockAlert = 4),
+            ProductDoc(skuCode = "UMT-BJ-002", name = "Baju Koko Kurta Linen", category = ProductCategory.BAJU.name, variantName = "Lengan 3/4", color = "Putih Gading", size = "L", variantInfo = "Varian: Lengan 3/4 • Warna: Putih Gading • Ukuran: L", costPrice = 95000L, sellingPrice = 145000L, stock = 18, minStockAlert = 5),
+            ProductDoc(skuCode = "UMT-BJ-003", name = "Khimar Ceruty 2 Layer", category = ProductCategory.BAJU.name, variantName = "Pet Antem", color = "Mocca", size = "All Size", variantInfo = "Varian: Pet Antem • Warna: Mocca • Ukuran: All Size", costPrice = 55000L, sellingPrice = 89000L, stock = 25, minStockAlert = 5),
+            ProductDoc(skuCode = "UMT-BK-001", name = "Sirah Nabawiyah Ar-Rahiq Al-Makhtum", category = ProductCategory.BUKU.name, variantName = "Hardcover", size = "680 Halaman", variantInfo = "Varian: Hardcover • Ukuran: 680 Halaman", costPrice = 88000L, sellingPrice = 130000L, stock = 12, minStockAlert = 3),
+            ProductDoc(skuCode = "UMT-BK-002", name = "Al-Qur'an Terjemah Tajwid A5", category = ProductCategory.BUKU.name, variantName = "Kertas QPP", color = "Emas", size = "A5", variantInfo = "Varian: Kertas QPP • Warna: Emas • Ukuran: A5", costPrice = 62000L, sellingPrice = 95000L, stock = 20, minStockAlert = 5),
+            ProductDoc(skuCode = "UMT-BK-003", name = "Riyadhus Shalihin Terjemah Lengkap", category = ProductCategory.BUKU.name, variantName = "Darul Haq", size = "Hardcover", variantInfo = "Varian: Darul Haq • Ukuran: Hardcover", costPrice = 75000L, sellingPrice = 115000L, stock = 9, minStockAlert = 3),
+            ProductDoc(skuCode = "UMT-KM-001", name = "Sajadah Turki Tebal Motif Kiswah", category = ProductCategory.KEBUTUHAN_MUSLIM.name, variantName = "Motif Kiswah", color = "Emerald Gold", size = "70x110 cm", variantInfo = "Varian: Motif Kiswah • Warna: Emerald Gold • Ukuran: 70x110 cm", costPrice = 70000L, sellingPrice = 110000L, stock = 16, minStockAlert = 4),
+            ProductDoc(skuCode = "UMT-KM-002", name = "Mukena Silk Armani Travel Pouch", category = ProductCategory.KEBUTUHAN_MUSLIM.name, variantName = "Travel Pouch", color = "Dusty Rose", size = "Dewasa", variantInfo = "Varian: Travel Pouch • Warna: Dusty Rose • Ukuran: Dewasa", costPrice = 140000L, sellingPrice = 215000L, stock = 10, minStockAlert = 3),
+            ProductDoc(skuCode = "UMT-KM-003", name = "Parfum Non-Alkohol Kasturi Kijang 12ml", category = ProductCategory.KEBUTUHAN_MUSLIM.name, variantName = "Roll-On Kristal", size = "12ml", variantInfo = "Varian: Roll-On Kristal • Ukuran: 12ml", costPrice = 22000L, sellingPrice = 45000L, stock = 30, minStockAlert = 6),
+            ProductDoc(skuCode = "UMT-AK-001", name = "Peci Rajut Yaman & Tasbih Kayu Kokka", category = ProductCategory.AKSESORIS.name, variantName = "Paket Hemat", color = "Coklat", size = "33 Butir", variantInfo = "Varian: Paket Hemat • Warna: Coklat • Ukuran: 33 Butir", costPrice = 28000L, sellingPrice = 52000L, stock = 22, minStockAlert = 5)
         )
 
         val toInsert = starter.filter { it.skuCode !in existingSkus }
@@ -936,18 +1202,21 @@ class FirestorePosRepository(
             val pRef = storeRef.collection("products").document()
             batch.set(
                 pRef,
-                mapOf(
-                    "skuCode" to item.skuCode,
-                    "name" to item.name,
-                    "category" to item.category,
-                    "variantInfo" to item.variantInfo,
-                    "costPrice" to item.costPrice,
-                    "sellingPrice" to item.sellingPrice,
-                    "stock" to item.stock,
-                    "minStockAlert" to item.minStockAlert,
-                    "createdAt" to FieldValue.serverTimestamp(),
-                    "updatedAt" to FieldValue.serverTimestamp()
-                )
+                buildMap<String, Any> {
+                    put("skuCode", item.skuCode)
+                    put("name", item.name)
+                    put("category", item.category)
+                    if (item.variantInfo.isNotBlank()) put("variantInfo", item.variantInfo)
+                    if (item.variantName.isNotBlank()) put("variantName", item.variantName)
+                    if (item.color.isNotBlank()) put("color", item.color)
+                    if (item.size.isNotBlank()) put("size", item.size)
+                    put("costPrice", item.costPrice)
+                    put("sellingPrice", item.sellingPrice)
+                    put("stock", item.stock)
+                    put("minStockAlert", item.minStockAlert)
+                    put("createdAt", FieldValue.serverTimestamp())
+                    put("updatedAt", FieldValue.serverTimestamp())
+                }
             )
             val hRef = storeRef.collection("stock_histories").document()
             batch.set(

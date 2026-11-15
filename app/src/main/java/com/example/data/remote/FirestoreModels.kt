@@ -71,12 +71,107 @@ data class StaffPinProfileDoc(
 }
 
 @IgnoreExtraProperties
+data class StoreCategoryDoc(
+    @DocumentId val id: String = "",
+    val code: String = "",
+    val displayName: String = "",
+    val codePrefix: String = "CT",
+    val colorIndex: Int = 0,
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null
+) {
+    companion object {
+        fun defaultPresets(): List<StoreCategoryDoc> = listOf(
+            StoreCategoryDoc(
+                id = "cat_baju",
+                code = ProductCategory.BAJU.name,
+                displayName = ProductCategory.BAJU.displayName,
+                codePrefix = ProductCategory.BAJU.codePrefix,
+                colorIndex = 0
+            ),
+            StoreCategoryDoc(
+                id = "cat_buku",
+                code = ProductCategory.BUKU.name,
+                displayName = ProductCategory.BUKU.displayName,
+                codePrefix = ProductCategory.BUKU.codePrefix,
+                colorIndex = 1
+            ),
+            StoreCategoryDoc(
+                id = "cat_kebutuhan_muslim",
+                code = ProductCategory.KEBUTUHAN_MUSLIM.name,
+                displayName = ProductCategory.KEBUTUHAN_MUSLIM.displayName,
+                codePrefix = ProductCategory.KEBUTUHAN_MUSLIM.codePrefix,
+                colorIndex = 2
+            ),
+            StoreCategoryDoc(
+                id = "cat_aksesoris",
+                code = ProductCategory.AKSESORIS.name,
+                displayName = ProductCategory.AKSESORIS.displayName,
+                codePrefix = ProductCategory.AKSESORIS.codePrefix,
+                colorIndex = 3
+            )
+        )
+
+        fun normalizeCode(displayName: String): String {
+            val ascii = displayName.trim().uppercase()
+                .replace(Regex("[^A-Z0-9]+"), "_")
+                .trim('_')
+            return ascii.take(48).ifBlank { "KATEGORI" }
+        }
+
+        fun suggestPrefix(displayName: String): String {
+            val words = displayName.trim().uppercase()
+                .split(Regex("[^A-Z0-9]+"))
+                .filter { it.isNotBlank() }
+            val raw = when {
+                words.size >= 2 -> "${words[0].first()}${words[1].first()}"
+                words.size == 1 && words[0].length >= 2 -> words[0].take(2)
+                words.size == 1 -> words[0]
+                else -> "CT"
+            }
+            return raw.take(4).ifBlank { "CT" }
+        }
+
+        fun resolve(categoryCode: String, categories: List<StoreCategoryDoc>): StoreCategoryDoc {
+            val matched = categories.firstOrNull { it.code.equals(categoryCode, ignoreCase = true) }
+            if (matched != null) return matched
+            val enumMatch = ProductCategory.entries.firstOrNull { it.name.equals(categoryCode, ignoreCase = true) }
+            if (enumMatch != null) {
+                return StoreCategoryDoc(
+                    id = "cat_${enumMatch.name.lowercase()}",
+                    code = enumMatch.name,
+                    displayName = enumMatch.displayName,
+                    codePrefix = enumMatch.codePrefix,
+                    colorIndex = enumMatch.ordinal
+                )
+            }
+            val cleanCode = categoryCode.trim().ifBlank { "UMUM" }
+            val pretty = cleanCode.replace('_', ' ').lowercase()
+                .split(' ')
+                .filter { it.isNotBlank() }
+                .joinToString(" ") { w -> w.replaceFirstChar { ch -> ch.uppercase() } }
+                .ifBlank { "Umum" }
+            return StoreCategoryDoc(
+                id = "cat_${cleanCode.lowercase().replace(Regex("[^a-z0-9_]+"), "_").take(40)}",
+                code = cleanCode.uppercase(),
+                displayName = pretty,
+                codePrefix = suggestPrefix(pretty),
+                colorIndex = kotlin.math.abs(cleanCode.uppercase().hashCode()) % 6
+            )
+        }
+    }
+}
+
+@IgnoreExtraProperties
 data class ProductDoc(
     @DocumentId val id: String = "",
     val skuCode: String = "",
     val name: String = "",
     val category: String = ProductCategory.BAJU.name,
     val variantInfo: String = "",
+    val variantName: String = "",
+    val color: String = "",
+    val size: String = "",
     val costPrice: Long = 0L,
     val sellingPrice: Long = 0L,
     val discountPercent: Int = 0,
@@ -108,6 +203,50 @@ data class ProductDoc(
     @get:Exclude
     val isLowStock: Boolean
         get() = stock <= minStockAlert
+
+    @get:Exclude
+    val attributeBadges: List<Pair<String, String>>
+        get() {
+            val cleanVariant = variantName.trim()
+            val cleanColor = color.trim()
+            val cleanSize = this@ProductDoc.size.trim()
+            return buildList {
+                if (cleanVariant.isNotBlank()) add("Varian" to cleanVariant)
+                if (cleanColor.isNotBlank()) add("Warna" to cleanColor)
+                if (cleanSize.isNotBlank()) add("Ukuran" to cleanSize)
+            }
+        }
+
+    @get:Exclude
+    val resolvedVariantSummary: String
+        get() = composeVariantSummary(variantName, color, size, variantInfo)
+
+    @get:Exclude
+    val hasAttributes: Boolean
+        get() = variantName.isNotBlank() || color.isNotBlank() || size.isNotBlank() || variantInfo.isNotBlank()
+
+    fun resolvedCategory(categories: List<StoreCategoryDoc>): StoreCategoryDoc =
+        StoreCategoryDoc.resolve(category, categories)
+
+    companion object {
+        fun composeVariantSummary(
+            variantName: String = "",
+            color: String = "",
+            size: String = "",
+            legacyVariantInfo: String = ""
+        ): String {
+            val structuredParts = buildList {
+                if (variantName.trim().isNotBlank()) add("Varian: ${variantName.trim()}")
+                if (color.trim().isNotBlank()) add("Warna: ${color.trim()}")
+                if (size.trim().isNotBlank()) add("Ukuran: ${size.trim()}")
+            }
+            return if (structuredParts.isNotEmpty()) {
+                structuredParts.joinToString(" • ").take(160)
+            } else {
+                legacyVariantInfo.trim().take(160)
+            }
+        }
+    }
 }
 
 @IgnoreExtraProperties
@@ -128,6 +267,7 @@ data class SaleTransactionDoc(
     val cashierUid: String = "",
     val cashierName: String = "",
     val cashierRole: String = UserRole.KASIR.name,
+    val customerName: String = "",
     val notes: String = "",
     val qrisReference: String = "",
     @ServerTimestamp val createdAt: Timestamp? = null
@@ -150,6 +290,7 @@ data class SaleItemDoc(
     val productId: String = "",
     val skuCode: String = "",
     val productName: String = "",
+    val variantSummary: String = "",
     val categoryName: String = "",
     val quantity: Int = 0,
     val unitCostPrice: Long = 0L,

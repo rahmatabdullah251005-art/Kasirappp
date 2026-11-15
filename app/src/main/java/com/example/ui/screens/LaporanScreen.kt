@@ -36,12 +36,17 @@ import androidx.compose.material.icons.rounded.AccountBalanceWallet
 import androidx.compose.material.icons.rounded.AddBox
 import androidx.compose.material.icons.rounded.CalendarMonth
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Clear
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.CloudDone
 import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.EmojiEvents
 import androidx.compose.material.icons.rounded.FileDownload
+import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Insights
 import androidx.compose.material.icons.rounded.NotificationsActive
+import androidx.compose.material.icons.rounded.Print
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.ShoppingBag
 import androidx.compose.material.icons.rounded.WarningAmber
@@ -57,6 +62,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -83,10 +89,14 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.example.data.local.entity.PaymentMethod
+import com.example.data.local.entity.StockChangeType
 import com.example.data.remote.CloudSaleWithItems
 import com.example.data.remote.ProductDoc
+import com.example.data.remote.StockHistoryDoc
 import com.example.ui.components.KpiMetricCard
 import com.example.ui.components.RestockDialog
+import com.example.ui.components.StockHistoryDialog
+import com.example.ui.components.ThermalPrintDialog
 import com.example.ui.theme.DangerCrimson
 import com.example.ui.theme.DangerCrimsonContainer
 import com.example.ui.theme.EmeraldPrimary
@@ -98,17 +108,24 @@ import com.example.ui.theme.WarningAmberContainer
 import com.example.ui.viewmodel.DailyReportUiState
 import com.example.ui.viewmodel.DailyTrendPoint
 import com.example.ui.viewmodel.ReportPeriodMode
+import com.example.util.BestSellerItemSummary
 import com.example.util.CurrencyFormatter
 import com.example.util.DateUtils
 import com.example.util.ReportExporter
 import com.example.util.StockAlertSeverity
 import com.example.util.StockAlertUiState
+import com.example.util.StockHistoryFilterType
+import com.example.util.StockHistoryPeriodFilter
+import com.example.util.StockHistorySummarizer
+import com.example.util.TransactionSearchHelper
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LaporanScreen(
     storeName: String,
     reportState: DailyReportUiState,
+    allOwnerTransactions: List<CloudSaleWithItems> = reportState.transactions,
+    stockHistories: List<StockHistoryDoc> = emptyList(),
     selectedDateKey: String,
     periodMode: ReportPeriodMode,
     sevenDayTrend: List<DailyTrendPoint>,
@@ -124,8 +141,23 @@ fun LaporanScreen(
 ) {
     var showDatePicker by remember { mutableStateOf(false) }
     var showExportDialog by remember { mutableStateOf(false) }
+    var showStockHistoryDialog by remember { mutableStateOf(false) }
     var selectedTransactionDetail by remember { mutableStateOf<CloudSaleWithItems?>(null) }
     var restockTargetProduct by remember { mutableStateOf<ProductDoc?>(null) }
+    var historySearchQuery by remember { mutableStateOf("") }
+    var printTargetTransaction by remember { mutableStateOf<CloudSaleWithItems?>(null) }
+
+    val displayedHistoryTransactions = remember(
+        historySearchQuery,
+        reportState.transactions,
+        allOwnerTransactions
+    ) {
+        if (historySearchQuery.isBlank()) {
+            reportState.transactions
+        } else {
+            TransactionSearchHelper.filterTransactions(allOwnerTransactions, historySearchQuery)
+        }
+    }
 
     val todayKey = remember { DateUtils.todayKey() }
     val yesterdayKey = remember { DateUtils.dateKeyForOffset(1) }
@@ -413,6 +445,23 @@ fun LaporanScreen(
             }
         }
 
+        // Best Seller Ranking List
+        item {
+            BestSellerRankingCard(
+                periodLabel = reportState.periodLabel,
+                transactions = reportState.transactions
+            )
+        }
+
+        // Stock Additions & Reductions Recap Card (Owner History)
+        item {
+            OwnerStockMovementRecapCard(
+                stockHistories = stockHistories,
+                periodMode = periodMode,
+                onOpenFullHistory = { showStockHistoryDialog = true }
+            )
+        }
+
         // Sold Items Detailed List
         item {
             Text(
@@ -452,7 +501,7 @@ fun LaporanScreen(
                 }
             }
         } else {
-            items(reportState.soldItems, key = { "${it.productId}_${it.unitPrice}" }) { sold ->
+            items(reportState.soldItems, key = { "${it.productId}_${it.variantSummary}_${it.unitPrice}" }) { sold ->
                 Surface(
                     shape = MaterialTheme.shapes.medium,
                     color = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -476,6 +525,15 @@ fun LaporanScreen(
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
+                                if (sold.variantSummary.isNotBlank()) {
+                                    Text(
+                                        text = sold.variantSummary,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
                                 Text(
                                     text = "${sold.categoryName} • ${sold.skuCode}",
                                     style = MaterialTheme.typography.labelSmall,
@@ -526,17 +584,78 @@ fun LaporanScreen(
                     }
                 }
             }
+        }
 
-            item {
-                Spacer(Modifier.height(4.dp))
+        // Transaction History + Search Bar (search across date, customer name, items sold, or invoice)
+        item {
+            Spacer(Modifier.height(4.dp))
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    text = "Riwayat Transaksi (${reportState.transactions.size})",
+                    text = if (historySearchQuery.isBlank()) {
+                        "Riwayat Transaksi (${displayedHistoryTransactions.size})"
+                    } else {
+                        "Hasil Pencarian (${displayedHistoryTransactions.size} dari ${allOwnerTransactions.size} pesanan)"
+                    },
                     style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                 )
+                OutlinedTextField(
+                    value = historySearchQuery,
+                    onValueChange = { historySearchQuery = it },
+                    placeholder = { Text("Cari tanggal, pelanggan, item terjual, atau no. struk…") },
+                    leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = "Cari transaksi") },
+                    trailingIcon = {
+                        if (historySearchQuery.isNotEmpty()) {
+                            IconButton(
+                                onClick = { historySearchQuery = "" },
+                                modifier = Modifier.testTag("clear_transaction_search_button")
+                            ) {
+                                Icon(Icons.Rounded.Clear, contentDescription = "Hapus pencarian")
+                            }
+                        }
+                    },
+                    singleLine = true,
+                    shape = MaterialTheme.shapes.medium,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("transaction_history_search_input")
+                )
             }
+        }
 
-            items(reportState.transactions, key = { it.transaction.id }) { txWithItems ->
+        if (displayedHistoryTransactions.isEmpty()) {
+            item {
+                Surface(
+                    shape = MaterialTheme.shapes.medium,
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(18.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(
+                            text = if (historySearchQuery.isNotBlank()) {
+                                "Tidak ditemukan pesanan untuk \"$historySearchQuery\""
+                            } else {
+                                "Belum ada riwayat transaksi pada periode ini"
+                            },
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        if (historySearchQuery.isNotBlank()) {
+                            Text(
+                                text = "Coba kata kunci tanggal (cth: 15 Nov), nama pelanggan, atau nama barang yang terjual.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+        } else {
+            items(displayedHistoryTransactions, key = { it.transaction.id }) { txWithItems ->
                 val tx = txWithItems.transaction
+                val itemSummary = txWithItems.items.joinToString(", ") { "${it.productName} (${it.quantity}x)" }
                 Surface(
                     shape = MaterialTheme.shapes.medium,
                     color = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -545,6 +664,7 @@ fun LaporanScreen(
                         .fillMaxWidth()
                         .clip(MaterialTheme.shapes.medium)
                         .clickable { selectedTransactionDetail = txWithItems }
+                        .testTag("history_tx_card_${tx.id}")
                 ) {
                     Row(
                         modifier = Modifier
@@ -563,12 +683,30 @@ fun LaporanScreen(
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                            val metaLine = buildString {
+                                if (tx.customerName.isNotBlank()) {
+                                    append("Pelanggan: ${tx.customerName} • ")
+                                }
+                                append("Kasir: ${tx.cashierName} (${tx.totalItems} pcs)")
+                            }
                             Text(
-                                text = "Kasir: ${tx.cashierName} (${tx.totalItems} pcs)",
+                                text = metaLine,
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
+                            if (itemSummary.isNotBlank()) {
+                                Text(
+                                    text = itemSummary,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                         }
+                        Spacer(Modifier.width(8.dp))
                         Column(horizontalAlignment = Alignment.End) {
                             Text(
                                 text = CurrencyFormatter.formatRupiah(tx.finalRevenue),
@@ -615,7 +753,20 @@ fun LaporanScreen(
     selectedTransactionDetail?.let { detail ->
         TransactionDetailDialog(
             txWithItems = detail,
+            onPrintReceipt = {
+                selectedTransactionDetail = null
+                printTargetTransaction = detail
+            },
             onDismiss = { selectedTransactionDetail = null }
+        )
+    }
+
+    printTargetTransaction?.let { target ->
+        ThermalPrintDialog(
+            receipt = target,
+            storeName = storeName,
+            onShowMessage = onShowMessage,
+            onDismiss = { printTargetTransaction = null }
         )
     }
 
@@ -638,6 +789,15 @@ fun LaporanScreen(
                     restockTargetProduct = null
                 }
             }
+        )
+    }
+
+    if (showStockHistoryDialog) {
+        StockHistoryDialog(
+            storeName = storeName,
+            histories = stockHistories,
+            onShowMessage = onShowMessage,
+            onDismiss = { showStockHistoryDialog = false }
         )
     }
 }
@@ -933,6 +1093,7 @@ private fun RevenueProfitBarChart(points: List<DailyTrendPoint>) {
 @Composable
 private fun TransactionDetailDialog(
     txWithItems: CloudSaleWithItems,
+    onPrintReceipt: () -> Unit,
     onDismiss: () -> Unit
 ) {
     val tx = txWithItems.transaction
@@ -954,6 +1115,13 @@ private fun TransactionDetailDialog(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                if (tx.customerName.isNotBlank()) {
+                    Text(
+                        text = "Pelanggan: ${tx.customerName}",
+                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
                 if (tx.qrisReference.isNotBlank()) {
                     Text(
                         text = "Ref QRIS: ${tx.qrisReference}",
@@ -984,6 +1152,13 @@ private fun TransactionDetailDialog(
                                     style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
                                 )
                             }
+                            if (item.variantSummary.isNotBlank()) {
+                                Text(
+                                    text = item.variantSummary,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                             Text(
                                 text = "Harga: ${CurrencyFormatter.formatRupiah(item.unitSellingPrice)} • Modal: ${CurrencyFormatter.formatRupiah(item.subtotalCost)} • Untung: ${CurrencyFormatter.formatRupiah(item.subtotalProfit)}",
                                 style = MaterialTheme.typography.bodySmall,
@@ -1012,8 +1187,26 @@ private fun TransactionDetailDialog(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    Button(onClick = onDismiss) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = onPrintReceipt,
+                        modifier = Modifier
+                            .weight(1f)
+                            .heightIn(min = 48.dp)
+                    ) {
+                        Icon(Icons.Rounded.Print, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Cetak Struk")
+                    }
+                    Button(
+                        onClick = onDismiss,
+                        modifier = Modifier
+                            .weight(1f)
+                            .heightIn(min = 48.dp)
+                    ) {
                         Text("Tutup")
                     }
                 }
@@ -1188,6 +1381,482 @@ private fun ExportReportDialog(
                     Icon(Icons.Rounded.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(8.dp))
                     Text("Salin Teks Laporan")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BestSellerRankingCard(
+    periodLabel: String,
+    transactions: List<CloudSaleWithItems>
+) {
+    var sortByRevenue by remember { mutableStateOf(false) }
+    var showAll by remember { mutableStateOf(false) }
+
+    val bestSellers: List<BestSellerItemSummary> = remember(transactions, sortByRevenue) {
+        ReportExporter.aggregateBestSellers(
+            transactions = transactions,
+            limit = 10,
+            sortByRevenue = sortByRevenue
+        )
+    }
+
+    Surface(
+        shape = MaterialTheme.shapes.large,
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("best_seller_card")
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = WarningAmberContainer
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.EmojiEvents,
+                            contentDescription = "Barang Best Seller",
+                            tint = GoldSecondary,
+                            modifier = Modifier
+                                .padding(8.dp)
+                                .size(22.dp)
+                        )
+                    }
+                    Column {
+                        Text(
+                            text = if (bestSellers.isEmpty()) {
+                                "Barang Best Seller"
+                            } else {
+                                "Barang Best Seller (Top ${bestSellers.size})"
+                            },
+                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
+                        )
+                        Text(
+                            text = "Produk terlaris pada $periodLabel",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            }
+
+            if (bestSellers.isEmpty()) {
+                Surface(
+                    shape = MaterialTheme.shapes.medium,
+                    color = MaterialTheme.colorScheme.surfaceContainerLowest,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = "Belum ada barang terjual pada periode ini. Daftar produk terlaris akan muncul otomatis setelah transaksi tercatat.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(12.dp)
+                    )
+                }
+            } else {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(
+                        selected = !sortByRevenue,
+                        onClick = { sortByRevenue = false },
+                        label = { Text("Terlaris (Qty)") },
+                        modifier = Modifier.testTag("best_seller_sort_qty")
+                    )
+                    FilterChip(
+                        selected = sortByRevenue,
+                        onClick = { sortByRevenue = true },
+                        label = { Text("Omzet Tertinggi") },
+                        modifier = Modifier.testTag("best_seller_sort_revenue")
+                    )
+                }
+
+                val maxMetric = if (sortByRevenue) {
+                    bestSellers.maxOf { it.totalRevenue }.coerceAtLeast(1L).toFloat()
+                } else {
+                    bestSellers.maxOf { it.totalQuantity }.coerceAtLeast(1).toFloat()
+                }
+                val visibleList = if (showAll) bestSellers else bestSellers.take(5)
+
+                visibleList.forEachIndexed { idx, item ->
+                    val rank = idx + 1
+                    val badgeBg = when (rank) {
+                        1 -> WarningAmberContainer
+                        2 -> MaterialTheme.colorScheme.primaryContainer
+                        3 -> ProfitGreenContainer
+                        else -> MaterialTheme.colorScheme.surfaceContainerHigh
+                    }
+                    val badgeFg = when (rank) {
+                        1 -> GoldSecondary
+                        2 -> MaterialTheme.colorScheme.primary
+                        3 -> ProfitGreen
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+                    val metricRatio = if (sortByRevenue) {
+                        item.totalRevenue.toFloat() / maxMetric
+                    } else {
+                        item.totalQuantity.toFloat() / maxMetric
+                    }
+
+                    Surface(
+                        shape = MaterialTheme.shapes.medium,
+                        color = MaterialTheme.colorScheme.surfaceContainerLowest,
+                        border = BorderStroke(
+                            width = if (rank == 1) 1.5.dp else 1.dp,
+                            color = if (rank == 1) GoldSecondary.copy(alpha = 0.6f) else MaterialTheme.colorScheme.outlineVariant
+                        )
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    modifier = Modifier.weight(1f),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Surface(
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = badgeBg
+                                    ) {
+                                        Text(
+                                            text = "#$rank",
+                                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.ExtraBold),
+                                            color = badgeFg,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                        )
+                                    }
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = item.productName,
+                                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        if (item.variantSummary.isNotBlank()) {
+                                            Text(
+                                                text = item.variantSummary,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.primary,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                        Text(
+                                            text = "${item.categoryName} • ${item.transactionCount} transaksi",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                }
+                                Spacer(Modifier.width(8.dp))
+                                Column(horizontalAlignment = Alignment.End) {
+                                    Surface(
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = MaterialTheme.colorScheme.primaryContainer
+                                    ) {
+                                        Text(
+                                            text = "${item.totalQuantity} pcs",
+                                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                    Spacer(Modifier.height(2.dp))
+                                    Text(
+                                        text = CurrencyFormatter.formatRupiah(item.totalRevenue),
+                                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold)
+                                    )
+                                    Text(
+                                        text = "Untung ${CurrencyFormatter.formatCompactRupiah(item.totalProfit)}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = ProfitGreen
+                                    )
+                                }
+                            }
+                            LinearProgressIndicator(
+                                progress = { metricRatio.coerceIn(0.05f, 1f) },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(6.dp)
+                                    .clip(RoundedCornerShape(50))
+                            )
+                        }
+                    }
+                }
+
+                if (bestSellers.size > 5) {
+                    TextButton(
+                        onClick = { showAll = !showAll },
+                        modifier = Modifier.align(Alignment.End)
+                    ) {
+                        Text(if (showAll) "Tampilkan Top 5" else "Lihat Semua (${bestSellers.size} Produk)")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun OwnerStockMovementRecapCard(
+    stockHistories: List<StockHistoryDoc>,
+    periodMode: ReportPeriodMode,
+    onOpenFullHistory: () -> Unit
+) {
+    val activePeriod = if (periodMode == ReportPeriodMode.LAST_7_DAYS) {
+        StockHistoryPeriodFilter.LAST_7_DAYS
+    } else {
+        StockHistoryPeriodFilter.TODAY
+    }
+    val scopedLogs = remember(stockHistories, activePeriod) {
+        StockHistorySummarizer.filterHistories(
+            histories = stockHistories,
+            typeFilter = StockHistoryFilterType.ALL,
+            periodFilter = activePeriod
+        )
+    }
+    val summary = remember(scopedLogs) {
+        StockHistorySummarizer.summarize(scopedLogs)
+    }
+    val recentLogs = remember(stockHistories) {
+        stockHistories
+            .filter { it.changeTypeEnum != StockChangeType.PENJUALAN }
+            .sortedByDescending { it.timestampMillis }
+            .take(4)
+            .ifEmpty { stockHistories.sortedByDescending { it.timestampMillis }.take(4) }
+    }
+
+    Surface(
+        shape = MaterialTheme.shapes.large,
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("owner_stock_movement_recap_card")
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.History,
+                            contentDescription = "Rekapan Tambah dan Kurang Stok",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier
+                                .padding(8.dp)
+                                .size(22.dp)
+                        )
+                    }
+                    Column {
+                        Text(
+                            text = "Rekapan Tambah & Kurang Stok",
+                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
+                        )
+                        Text(
+                            text = "Ringkasan mutasi (${activePeriod.label}) • Total ${stockHistories.size} catatan",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+                FilledTonalButton(
+                    onClick = onOpenFullHistory,
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                    modifier = Modifier
+                        .heightIn(min = 40.dp)
+                        .testTag("laporan_open_stock_history_button")
+                ) {
+                    Text("Riwayat", style = MaterialTheme.typography.labelMedium)
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Surface(
+                    modifier = Modifier.weight(1f),
+                    shape = MaterialTheme.shapes.small,
+                    color = ProfitGreenContainer.copy(alpha = 0.65f)
+                ) {
+                    Column(modifier = Modifier.padding(8.dp)) {
+                        Text(
+                            text = "Ditambah (+)",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = "+${summary.totalAddedUnits} pcs",
+                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                            color = ProfitGreen
+                        )
+                        Text(
+                            text = "${summary.totalAddedEvents}x catatan",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                Surface(
+                    modifier = Modifier.weight(1f),
+                    shape = MaterialTheme.shapes.small,
+                    color = DangerCrimsonContainer.copy(alpha = 0.55f)
+                ) {
+                    Column(modifier = Modifier.padding(8.dp)) {
+                        Text(
+                            text = "Dikurangi (-)",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = "-${summary.totalManualReducedUnits} pcs",
+                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                            color = DangerCrimson
+                        )
+                        Text(
+                            text = "${summary.totalManualReducedEvents}x koreksi",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                Surface(
+                    modifier = Modifier.weight(1f),
+                    shape = MaterialTheme.shapes.small,
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
+                ) {
+                    Column(modifier = Modifier.padding(8.dp)) {
+                        Text(
+                            text = "Terjual Kasir",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = "-${summary.totalSalesReducedUnits} pcs",
+                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            text = "${summary.totalSalesEvents}x item",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            if (recentLogs.isEmpty()) {
+                Text(
+                    text = "Belum ada riwayat penambahan atau pengurangan stok.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                Text(
+                    text = "Aktivitas Stok Terbaru (Owner & Pegawai)",
+                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                recentLogs.forEach { log ->
+                    val isPos = log.quantityDelta >= 0
+                    val deltaColor = if (isPos) ProfitGreen else DangerCrimson
+                    Surface(
+                        shape = MaterialTheme.shapes.small,
+                        color = MaterialTheme.colorScheme.surfaceContainerLowest,
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f))
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 10.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = log.productName,
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = "${log.changeTypeEnum.displayName} • Oleh: ${log.actorName}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                if (log.note.isNotBlank()) {
+                                    Text(
+                                        text = "${DateUtils.formatDateTime(log.timestampMillis)} • ${log.note}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            Column(horizontalAlignment = Alignment.End) {
+                                Text(
+                                    text = if (isPos) "+${log.quantityDelta}" else "${log.quantityDelta}",
+                                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                    color = deltaColor
+                                )
+                                Text(
+                                    text = "Sisa ${log.stockAfter}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }

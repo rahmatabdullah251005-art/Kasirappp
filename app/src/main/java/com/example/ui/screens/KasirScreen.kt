@@ -6,6 +6,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.net.Uri
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
@@ -23,24 +24,31 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ReceiptLong
 import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.CalendarMonth
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Clear
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.EmojiEvents
+import androidx.compose.material.icons.rounded.FileDownload
 import androidx.compose.material.icons.rounded.Payments
+import androidx.compose.material.icons.rounded.Phone
+import androidx.compose.material.icons.rounded.Print
 import androidx.compose.material.icons.rounded.QrCode2
 import androidx.compose.material.icons.rounded.QrCodeScanner
-import androidx.compose.material.icons.rounded.ReceiptLong
 import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Share
@@ -50,6 +58,8 @@ import androidx.compose.material.icons.rounded.Storefront
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilledTonalIconButton
@@ -65,7 +75,9 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -88,25 +100,30 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.example.R
 import com.example.data.local.entity.PaymentMethod
-import com.example.data.local.entity.ProductCategory
 import com.example.data.local.entity.UserRole
 import com.example.data.remote.CloudSaleWithItems
 import com.example.data.remote.ProductDoc
 import com.example.data.remote.SaleTransactionDoc
 import com.example.data.remote.StaffPinProfileDoc
+import com.example.data.remote.StoreCategoryDoc
 import com.example.data.remote.StoreDoc
 import com.example.ui.components.CategoryBadge
 import com.example.ui.components.NumericOutlinedField
+import com.example.ui.components.ProductAttributeChipsRow
 import com.example.ui.components.SingleCodeQrScannerDialog
 import com.example.ui.components.StockStatusBadge
+import com.example.ui.components.ThermalPrintDialog
+import com.example.ui.theme.GoldSecondary
 import com.example.ui.theme.ProfitGreen
 import com.example.ui.theme.ProfitGreenContainer
+import com.example.ui.theme.WarningAmberContainer
 import com.example.ui.viewmodel.CartUiItem
 import com.example.util.CurrencyFormatter
 import com.example.util.DateUtils
 import com.example.util.QrCodeGenerator
 import com.example.util.QrisConfigManager
 import com.example.util.ReportExporter
+import com.example.util.ThermalBluetoothPrinter
 
 private enum class DiscountInputMode { NOMINAL, PERCENT }
 
@@ -117,9 +134,14 @@ fun KasirScreen(
     cloudMemberRole: UserRole,
     activeStore: StoreDoc?,
     products: List<ProductDoc>,
+    categories: List<StoreCategoryDoc>,
     cartItems: List<CartUiItem>,
     lastReceipt: CloudSaleWithItems?,
     cashierTodayTransactions: List<SaleTransactionDoc>,
+    cashierRecapSales: List<CloudSaleWithItems> = emptyList(),
+    selectedCashierRecapDateKey: String = DateUtils.todayKey(),
+    onSelectCashierRecapDate: (String) -> Unit = {},
+    externalOpenCashierRecapTrigger: Int = 0,
     onAddToCart: (ProductDoc) -> Unit,
     onUpdateCartQty: (productId: String, newQty: Int) -> Unit,
     onSetCartItemCustomPrice: (productId: String, customPrice: Long?) -> Unit,
@@ -130,6 +152,7 @@ fun KasirScreen(
         discount: Long,
         paymentMethod: PaymentMethod,
         amountPaid: Long,
+        customerName: String,
         notes: String,
         qrisReference: String
     ) -> Unit,
@@ -139,17 +162,35 @@ fun KasirScreen(
     onShowMessage: (String) -> Unit = {}
 ) {
     var searchQuery by remember { mutableStateOf("") }
-    var selectedCategory by remember { mutableStateOf<ProductCategory?>(null) }
+    var selectedCategoryCode by remember { mutableStateOf<String?>(null) }
     var showCheckoutSheet by remember { mutableStateOf(false) }
     var showCashierShiftSheet by remember { mutableStateOf(false) }
 
-    val filteredProducts = remember(products, searchQuery, selectedCategory) {
+    androidx.compose.runtime.LaunchedEffect(externalOpenCashierRecapTrigger) {
+        if (externalOpenCashierRecapTrigger > 0) {
+            showCashierShiftSheet = true
+        }
+    }
+
+    androidx.compose.runtime.LaunchedEffect(categories) {
+        if (selectedCategoryCode != null &&
+            categories.none { it.code.equals(selectedCategoryCode, ignoreCase = true) }
+        ) {
+            selectedCategoryCode = null
+        }
+    }
+
+    val filteredProducts = remember(products, searchQuery, selectedCategoryCode) {
         val q = searchQuery.trim().lowercase()
         products.filter { product ->
-            val matchCat = selectedCategory == null || product.categoryEnum == selectedCategory
+            val matchCat = selectedCategoryCode == null ||
+                product.category.equals(selectedCategoryCode, ignoreCase = true)
             val matchText = q.isEmpty() ||
                 product.name.lowercase().contains(q) ||
                 product.skuCode.lowercase().contains(q) ||
+                product.variantName.lowercase().contains(q) ||
+                product.color.lowercase().contains(q) ||
+                product.size.lowercase().contains(q) ||
                 product.variantInfo.lowercase().contains(q)
             matchCat && matchText
         }
@@ -222,16 +263,18 @@ fun KasirScreen(
                         FilledTonalButton(
                             onClick = { showCashierShiftSheet = true },
                             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                            modifier = Modifier.height(34.dp)
+                            modifier = Modifier
+                                .height(34.dp)
+                                .testTag("cashier_recap_button")
                         ) {
                             Icon(
-                                imageVector = Icons.Rounded.ReceiptLong,
+                                imageVector = Icons.AutoMirrored.Rounded.ReceiptLong,
                                 contentDescription = null,
                                 modifier = Modifier.size(16.dp)
                             )
                             Spacer(Modifier.width(6.dp))
                             Text(
-                                text = "Shift Saya (${cashierTodayTransactions.size})",
+                                text = "Kirim Rekap (${cashierTodayTransactions.size})",
                                 style = MaterialTheme.typography.labelMedium
                             )
                         }
@@ -239,17 +282,17 @@ fun KasirScreen(
                 }
                 item {
                     FilterChip(
-                        selected = selectedCategory == null,
-                        onClick = { selectedCategory = null },
+                        selected = selectedCategoryCode == null,
+                        onClick = { selectedCategoryCode = null },
                         label = { Text("Semua (${products.size})") }
                     )
                 }
-                items(ProductCategory.entries) { category ->
-                    val count = products.count { it.categoryEnum == category }
+                items(categories, key = { it.id }) { category ->
+                    val count = products.count { it.category.equals(category.code, ignoreCase = true) }
                     FilterChip(
-                        selected = selectedCategory == category,
+                        selected = selectedCategoryCode.equals(category.code, ignoreCase = true),
                         onClick = {
-                            selectedCategory = if (selectedCategory == category) null else category
+                            selectedCategoryCode = if (selectedCategoryCode.equals(category.code, ignoreCase = true)) null else category.code
                         },
                         label = { Text("${category.displayName} ($count)") }
                     )
@@ -345,6 +388,7 @@ fun KasirScreen(
                         val qtyInCart = cartMap[product.id] ?: 0
                         KasirProductCard(
                             product = product,
+                            categories = categories,
                             qtyInCart = qtyInCart,
                             showCostAndProfit = isOwner,
                             onAdd = { onAddToCart(product) },
@@ -466,8 +510,8 @@ fun KasirScreen(
                     onClearCart()
                     showCheckoutSheet = false
                 },
-                onConfirmCheckout = { discount, method, paid, notes, qrisRef ->
-                    onCheckout(discount, method, paid, notes, qrisRef)
+                onConfirmCheckout = { discount, method, paid, customerName, notes, qrisRef ->
+                    onCheckout(discount, method, paid, customerName, notes, qrisRef)
                     showCheckoutSheet = false
                 }
             )
@@ -486,8 +530,12 @@ fun KasirScreen(
 
     if (showCashierShiftSheet) {
         CashierShiftSummaryDialog(
+            storeName = activeStore?.storeName ?: "UM TAZKIYAH",
             cashierName = currentUser.fullName,
-            transactions = cashierTodayTransactions,
+            recapSales = cashierRecapSales,
+            selectedDateKey = selectedCashierRecapDateKey,
+            onSelectDateKey = onSelectCashierRecapDate,
+            onShowMessage = onShowMessage,
             onDismiss = { showCashierShiftSheet = false }
         )
     }
@@ -496,6 +544,7 @@ fun KasirScreen(
 @Composable
 private fun KasirProductCard(
     product: ProductDoc,
+    categories: List<StoreCategoryDoc>,
     qtyInCart: Int,
     showCostAndProfit: Boolean,
     onAdd: () -> Unit,
@@ -533,7 +582,7 @@ private fun KasirProductCard(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    CategoryBadge(category = product.categoryEnum)
+                    CategoryBadge(category = product.resolvedCategory(categories))
                     StockStatusBadge(stock = product.stock, minAlert = product.minStockAlert)
                     if (product.discountPercent > 0) {
                         Surface(
@@ -555,25 +604,12 @@ private fun KasirProductCard(
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(
-                        text = product.skuCode,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    if (product.variantInfo.isNotBlank()) {
-                        Text(
-                            text = "• ${product.variantInfo}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
+                Text(
+                    text = product.skuCode,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                ProductAttributeChipsRow(product = product)
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -655,6 +691,7 @@ private fun CheckoutSheetContent(
         discount: Long,
         method: PaymentMethod,
         paid: Long,
+        customerName: String,
         notes: String,
         qrisReference: String
     ) -> Unit
@@ -663,6 +700,7 @@ private fun CheckoutSheetContent(
     var discountInput by remember { mutableStateOf("") }
     var selectedMethod by remember { mutableStateOf(PaymentMethod.TUNAI) }
     var cashPaidInput by remember { mutableStateOf("") }
+    var customerNameInput by remember { mutableStateOf("") }
     var notesInput by remember { mutableStateOf("") }
     var scannedQrisRef by remember { mutableStateOf("") }
 
@@ -757,6 +795,15 @@ private fun CheckoutSheetContent(
                                         )
                                     }
                                 }
+                            }
+                            if (item.product.resolvedVariantSummary.isNotBlank()) {
+                                Text(
+                                    text = item.product.resolvedVariantSummary,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
                             }
                             Text(
                                 text = "${CurrencyFormatter.formatRupiah(item.appliedUnitPrice)} x ${item.quantity} = ${CurrencyFormatter.formatRupiah(item.subtotalRevenue)}",
@@ -986,6 +1033,16 @@ private fun CheckoutSheetContent(
         }
 
         OutlinedTextField(
+            value = customerNameInput,
+            onValueChange = { customerNameInput = it },
+            label = { Text("Nama Pelanggan (Opsional)") },
+            singleLine = true,
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("checkout_customer_name_input")
+        )
+
+        OutlinedTextField(
             value = notesInput,
             onValueChange = { notesInput = it },
             label = { Text("Catatan Transaksi (Opsional)") },
@@ -1036,7 +1093,7 @@ private fun CheckoutSheetContent(
         Button(
             onClick = {
                 val effectivePaid = if (selectedMethod == PaymentMethod.TUNAI) cashPaid else finalTotal
-                onConfirmCheckout(discount, selectedMethod, effectivePaid, notesInput, scannedQrisRef)
+                onConfirmCheckout(discount, selectedMethod, effectivePaid, customerNameInput, notesInput, scannedQrisRef)
             },
             enabled = isCashValid,
             modifier = Modifier
@@ -1285,6 +1342,10 @@ private fun ReceiptDialog(
 ) {
     val tx = receipt.transaction
     val context = LocalContext.current
+    var showPrintDialog by remember { mutableStateOf(false) }
+    val savedPrinterName = remember(showPrintDialog) {
+        ThermalBluetoothPrinter.getSavedPrinterName(context)
+    }
     val receiptText = remember(receipt, storeName) {
         ReportExporter.buildCustomerDigitalReceipt(receipt, storeName)
     }
@@ -1337,8 +1398,9 @@ private fun ReceiptDialog(
 
                 HorizontalDivider()
 
+                val custLabel = if (tx.customerName.isNotBlank()) " • Pelanggan: ${tx.customerName}" else ""
                 Text(
-                    text = "$storeName • Kasir: ${tx.cashierName}",
+                    text = "$storeName • Kasir: ${tx.cashierName}$custLabel",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -1354,6 +1416,13 @@ private fun ReceiptDialog(
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(item.productName, style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold))
+                                if (item.variantSummary.isNotBlank()) {
+                                    Text(
+                                        text = item.variantSummary,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
                                 Text(
                                     "${item.quantity} x ${CurrencyFormatter.formatRupiah(item.unitSellingPrice)}",
                                     style = MaterialTheme.typography.bodySmall,
@@ -1453,6 +1522,30 @@ private fun ReceiptDialog(
                     }
                 }
 
+                FilledTonalButton(
+                    onClick = { showPrintDialog = true },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .testTag("print_thermal_receipt_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Print,
+                        contentDescription = "Cetak struk fisik lewat printer thermal Bluetooth",
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = if (!savedPrinterName.isNullOrBlank()) {
+                            "Cetak Struk Thermal ($savedPrinterName)"
+                        } else {
+                            "Cetak Struk Fisik (Bluetooth Thermal)"
+                        },
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
                 Spacer(Modifier.height(2.dp))
                 Button(
                     onClick = onDismiss,
@@ -1466,6 +1559,15 @@ private fun ReceiptDialog(
                 }
             }
         }
+    }
+
+    if (showPrintDialog) {
+        ThermalPrintDialog(
+            receipt = receipt,
+            storeName = storeName,
+            onShowMessage = onShowMessage,
+            onDismiss = { showPrintDialog = false }
+        )
     }
 }
 
@@ -1503,40 +1605,227 @@ private fun shareReceiptChooser(
     context.startActivity(Intent.createChooser(sendIntent, "Bagikan Struk Digital"))
 }
 
+private fun shareCashierRecapViaWhatsApp(
+    context: Context,
+    phoneRaw: String,
+    periodLabel: String,
+    recapText: String
+) {
+    val digits = phoneRaw.filter { it.isDigit() }
+    val normalizedPhone = when {
+        digits.startsWith("0") -> "62" + digits.drop(1)
+        digits.startsWith("62") -> digits
+        digits.isNotEmpty() -> "62$digits"
+        else -> ""
+    }
+    if (normalizedPhone.length >= 9) {
+        val waUri = Uri.parse("https://wa.me/$normalizedPhone?text=${Uri.encode(recapText)}")
+        val viewIntent = Intent(Intent.ACTION_VIEW, waUri)
+        try {
+            context.startActivity(viewIntent)
+            return
+        } catch (_: ActivityNotFoundException) {
+            // Fall back below
+        }
+    }
+    val sendIntent = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_SUBJECT, "Rekap Transaksi Pegawai ($periodLabel)")
+        putExtra(Intent.EXTRA_TEXT, recapText)
+    }
+    try {
+        context.startActivity(Intent(sendIntent).setPackage("com.whatsapp"))
+    } catch (_: ActivityNotFoundException) {
+        try {
+            context.startActivity(Intent(sendIntent).setPackage("com.whatsapp.w4b"))
+        } catch (_: ActivityNotFoundException) {
+            shareCashierRecapChooser(context, periodLabel, recapText)
+        }
+    }
+}
+
+private fun shareCashierRecapChooser(
+    context: Context,
+    periodLabel: String,
+    recapText: String
+) {
+    val sendIntent = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_SUBJECT, "Rekap Transaksi Pegawai ($periodLabel)")
+        putExtra(Intent.EXTRA_TEXT, recapText)
+    }
+    context.startActivity(Intent.createChooser(sendIntent, "Kirim Rekap Transaksi Pegawai"))
+}
+
+private fun shareCashierRecapCsv(
+    context: Context,
+    storeName: String,
+    cashierName: String,
+    dateKey: String,
+    periodLabel: String,
+    sales: List<CloudSaleWithItems>,
+    onShowMessage: (String) -> Unit
+) {
+    runCatching {
+        val csvContent = ReportExporter.buildCashierShiftRecapCsv(
+            storeName = storeName,
+            cashierName = cashierName,
+            periodLabel = periodLabel,
+            transactions = sales
+        )
+        val safeName = cashierName.lowercase().replace(Regex("[^a-z0-9]+"), "_").trim('_').ifBlank { "kasir" }
+        val uri = ReportExporter.saveTempReportFile(
+            context = context,
+            fileName = "rekap_${safeName}_${dateKey}.csv",
+            content = csvContent
+        )
+        val shareIntent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/csv"
+            putExtra(Intent.EXTRA_SUBJECT, "Rekap Transaksi Pegawai - $cashierName ($periodLabel)")
+            putExtra(Intent.EXTRA_STREAM, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        context.startActivity(Intent.createChooser(shareIntent, "Kirim File CSV Rekap Transaksi"))
+    }.onFailure { err ->
+        onShowMessage(err.message ?: "Gagal membuat file CSV rekap")
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun CashierShiftSummaryDialog(
+    storeName: String,
     cashierName: String,
-    transactions: List<SaleTransactionDoc>,
+    recapSales: List<CloudSaleWithItems>,
+    selectedDateKey: String,
+    onSelectDateKey: (String) -> Unit,
+    onShowMessage: (String) -> Unit,
     onDismiss: () -> Unit
 ) {
+    val context = LocalContext.current
+    val todayKey = remember { DateUtils.todayKey() }
+    val yesterdayKey = remember { DateUtils.dateKeyForOffset(1) }
+    var showDatePicker by remember { mutableStateOf(false) }
+    var onlyCurrentProfile by remember { mutableStateOf(true) }
+    var ownerWhatsappPhone by remember { mutableStateOf("") }
+
+    val matchingProfileCount = remember(recapSales, cashierName) {
+        recapSales.count { it.transaction.cashierName.equals(cashierName, ignoreCase = true) }
+    }
+    val hasMultipleProfiles = remember(recapSales, cashierName) {
+        recapSales.any { !it.transaction.cashierName.equals(cashierName, ignoreCase = true) }
+    }
+    val effectiveOnlyProfile = onlyCurrentProfile && (matchingProfileCount > 0 || !hasMultipleProfiles)
+    val displayedSales = remember(recapSales, effectiveOnlyProfile, cashierName) {
+        if (effectiveOnlyProfile) {
+            recapSales.filter { it.transaction.cashierName.equals(cashierName, ignoreCase = true) }
+        } else {
+            recapSales
+        }
+    }
+
+    val transactions = remember(displayedSales) { displayedSales.map { it.transaction } }
     val totalOmzet = transactions.sumOf { it.finalRevenue }
     val totalItems = transactions.sumOf { it.totalItems }
-    Dialog(onDismissRequest = onDismiss) {
+    val periodLabel = remember(selectedDateKey) { DateUtils.formatDisplayDate(selectedDateKey) }
+    val soldItems = remember(displayedSales) { ReportExporter.aggregateSoldItems(displayedSales) }
+    val bestSellers = remember(displayedSales) { ReportExporter.aggregateBestSellers(displayedSales, limit = 5) }
+    val recapText = remember(storeName, cashierName, periodLabel, displayedSales) {
+        ReportExporter.buildCashierShiftRecapText(
+            storeName = storeName,
+            cashierName = if (effectiveOnlyProfile) cashierName else "$cashierName (+ Shift Perangkat)",
+            periodLabel = periodLabel,
+            transactions = displayedSales
+        )
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
         Surface(
+            modifier = Modifier
+                .widthIn(max = 560.dp)
+                .fillMaxWidth()
+                .padding(16.dp),
             shape = MaterialTheme.shapes.extraLarge,
             color = MaterialTheme.colorScheme.surface
         ) {
             Column(
-                modifier = Modifier.padding(20.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                modifier = Modifier
+                    .verticalScroll(rememberScrollState())
+                    .padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Text(
-                    text = "Rekap Shift Kasir Hari Ini",
-                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                    text = "Rekap & Kirim Transaksi Pegawai",
+                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
                 )
                 Text(
-                    text = "Petugas: $cashierName • ${DateUtils.formatDisplayDate(DateUtils.todayKey())}",
+                    text = "Petugas: $cashierName • $periodLabel",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    item {
+                        FilterChip(
+                            selected = selectedDateKey == todayKey,
+                            onClick = { onSelectDateKey(todayKey) },
+                            label = { Text("Hari Ini") }
+                        )
+                    }
+                    item {
+                        FilterChip(
+                            selected = selectedDateKey == yesterdayKey,
+                            onClick = { onSelectDateKey(yesterdayKey) },
+                            label = { Text("Kemarin") }
+                        )
+                    }
+                    item {
+                        FilterChip(
+                            selected = selectedDateKey != todayKey && selectedDateKey != yesterdayKey,
+                            onClick = { showDatePicker = true },
+                            leadingIcon = {
+                                Icon(Icons.Rounded.CalendarMonth, contentDescription = null, modifier = Modifier.size(16.dp))
+                            },
+                            label = {
+                                Text(
+                                    if (selectedDateKey != todayKey && selectedDateKey != yesterdayKey) {
+                                        DateUtils.formatShortDate(selectedDateKey)
+                                    } else {
+                                        "Pilih Tanggal"
+                                    }
+                                )
+                            }
+                        )
+                    }
+                }
+
+                if (hasMultipleProfiles) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(
+                            selected = effectiveOnlyProfile,
+                            onClick = { onlyCurrentProfile = true },
+                            label = { Text("$cashierName ($matchingProfileCount)") }
+                        )
+                        FilterChip(
+                            selected = !effectiveOnlyProfile,
+                            onClick = { onlyCurrentProfile = false },
+                            label = { Text("Semua di HP (${recapSales.size})") }
+                        )
+                    }
+                }
+
                 Surface(
                     shape = MaterialTheme.shapes.medium,
-                    color = MaterialTheme.colorScheme.surfaceContainerLow
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
                 ) {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(12.dp),
+                            .padding(14.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         SummaryLine("Jumlah Transaksi", "${transactions.size} trx")
@@ -1544,22 +1833,336 @@ private fun CashierShiftSummaryDialog(
                         SummaryLine("Total Omzet Shift", CurrencyFormatter.formatRupiah(totalOmzet), bold = true)
                         HorizontalDivider()
                         PaymentMethod.entries.forEach { method ->
-                            val sum = transactions.filter { it.paymentMethodEnum == method }.sumOf { it.finalRevenue }
-                            SummaryLine("Via ${method.displayName}", CurrencyFormatter.formatRupiah(sum))
+                            val methodTxs = transactions.filter { it.paymentMethodEnum == method }
+                            val sum = methodTxs.sumOf { it.finalRevenue }
+                            SummaryLine("Via ${method.displayName} (${methodTxs.size}x)", CurrencyFormatter.formatRupiah(sum))
                         }
                     }
                 }
+
+                if (bestSellers.isNotEmpty()) {
+                    Surface(
+                        shape = MaterialTheme.shapes.medium,
+                        color = WarningAmberContainer.copy(alpha = 0.35f),
+                        border = BorderStroke(1.dp, GoldSecondary.copy(alpha = 0.45f))
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.EmojiEvents,
+                                    contentDescription = "Barang Best Seller Shift",
+                                    tint = GoldSecondary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Text(
+                                    text = "Barang Best Seller Shift (Top ${bestSellers.size})",
+                                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
+                                )
+                            }
+                            bestSellers.forEachIndexed { idx, best ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(
+                                        modifier = Modifier.weight(1f),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Text(
+                                            text = "#${idx + 1}",
+                                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.ExtraBold),
+                                            color = if (idx == 0) GoldSecondary else MaterialTheme.colorScheme.primary
+                                        )
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = best.productName,
+                                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                            if (best.variantSummary.isNotBlank()) {
+                                                Text(
+                                                    text = best.variantSummary,
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
+                                        }
+                                    }
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(
+                                        text = "${best.totalQuantity} pcs • ${CurrencyFormatter.formatCompactRupiah(best.totalRevenue)}",
+                                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (soldItems.isNotEmpty()) {
+                    Surface(
+                        shape = MaterialTheme.shapes.medium,
+                        color = MaterialTheme.colorScheme.surfaceContainerLow
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                text = "Ringkasan Barang Terjual (${soldItems.size} jenis)",
+                                style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
+                            )
+                            soldItems.take(6).forEach { sold ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "${sold.productName} (${sold.totalQuantity}x)",
+                                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        if (sold.variantSummary.isNotBlank()) {
+                                            Text(
+                                                text = sold.variantSummary,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                    }
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(
+                                        text = CurrencyFormatter.formatRupiah(sold.totalRevenue),
+                                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold)
+                                    )
+                                }
+                            }
+                            if (soldItems.size > 6) {
+                                Text(
+                                    text = "+ ${soldItems.size - 6} barang lainnya akan ikut terkirim di rekap",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+
+                if (displayedSales.isNotEmpty()) {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            text = "Riwayat Transaksi (${displayedSales.size})",
+                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
+                        )
+                        displayedSales.take(5).forEach { sale ->
+                            val tx = sale.transaction
+                            Surface(
+                                shape = MaterialTheme.shapes.small,
+                                color = MaterialTheme.colorScheme.surfaceContainerLowest,
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "${tx.invoiceNumber} • ${DateUtils.formatTime(tx.timestampMillis)}",
+                                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold)
+                                        )
+                                        val cust = if (tx.customerName.isNotBlank()) " • ${tx.customerName}" else ""
+                                        Text(
+                                            text = "${tx.paymentMethodEnum.displayName} • ${tx.totalItems} pcs$cust",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                    Text(
+                                        text = CurrencyFormatter.formatRupiah(tx.finalRevenue),
+                                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                            }
+                        }
+                        if (displayedSales.size > 5) {
+                            Text(
+                                text = "Semua ${displayedSales.size} invoice otomatis terlampir saat rekap dikirim.",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+
+                HorizontalDivider()
+
                 Text(
-                    text = "Catatan: Laporan modal, laba bersih, dan ekspor laporan hanya dapat diakses oleh Owner.",
+                    text = "Kirim Rekap Transaksi ke Owner / Admin",
+                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
+                )
+
+                OutlinedTextField(
+                    value = ownerWhatsappPhone,
+                    onValueChange = { ownerWhatsappPhone = it },
+                    label = { Text("Nomor WA Owner / Tujuan (Opsional)") },
+                    placeholder = { Text("Contoh: 081234567890") },
+                    leadingIcon = { Icon(Icons.Rounded.Phone, contentDescription = null) },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                    singleLine = true,
+                    supportingText = {
+                        Text("Kosongkan jika ingin memilih kontak langsung di WhatsApp")
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("cashier_recap_phone_input")
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    FilledTonalButton(
+                        onClick = {
+                            shareCashierRecapViaWhatsApp(
+                                context = context,
+                                phoneRaw = ownerWhatsappPhone,
+                                periodLabel = periodLabel,
+                                recapText = recapText
+                            )
+                        },
+                        modifier = Modifier
+                            .weight(1f)
+                            .heightIn(min = 48.dp)
+                            .testTag("cashier_recap_whatsapp_button"),
+                        colors = ButtonDefaults.filledTonalButtonColors(
+                            containerColor = ProfitGreenContainer,
+                            contentColor = ProfitGreen
+                        )
+                    ) {
+                        Icon(Icons.AutoMirrored.Rounded.Send, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("WhatsApp", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+
+                    OutlinedButton(
+                        onClick = { shareCashierRecapChooser(context, periodLabel, recapText) },
+                        modifier = Modifier
+                            .weight(1f)
+                            .heightIn(min = 48.dp)
+                            .testTag("cashier_recap_share_button")
+                    ) {
+                        Icon(Icons.Rounded.Share, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Lainnya", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+
+                    OutlinedIconButton(
+                        onClick = {
+                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                            clipboard?.setPrimaryClip(ClipData.newPlainText("Rekap Shift $cashierName", recapText))
+                            onShowMessage("Rekap transaksi berhasil disalin ke clipboard")
+                        },
+                        modifier = Modifier
+                            .size(48.dp)
+                            .testTag("cashier_recap_copy_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.ContentCopy,
+                            contentDescription = "Salin rekap transaksi"
+                        )
+                    }
+                }
+
+                OutlinedButton(
+                    onClick = {
+                        shareCashierRecapCsv(
+                            context = context,
+                            storeName = storeName,
+                            cashierName = cashierName,
+                            dateKey = selectedDateKey,
+                            periodLabel = periodLabel,
+                            sales = displayedSales,
+                            onShowMessage = onShowMessage
+                        )
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .testTag("cashier_recap_csv_button")
+                ) {
+                    Icon(Icons.Rounded.FileDownload, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Kirim File CSV Rekap Transaksi")
+                }
+
+                Text(
+                    text = "Catatan: Laporan modal dan laba bersih tetap hanya dapat diakses oleh Owner.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    Button(onClick = onDismiss) {
+                    Button(
+                        onClick = onDismiss,
+                        modifier = Modifier.heightIn(min = 48.dp)
+                    ) {
                         Text("Tutup")
                     }
                 }
             }
+        }
+    }
+
+    if (showDatePicker) {
+        val datePickerState = rememberDatePickerState()
+        DatePickerDialog(
+            onDismissRequest = { showDatePicker = false },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        datePickerState.selectedDateMillis?.let { millis ->
+                            onSelectDateKey(DateUtils.dateKeyFromMillis(millis))
+                        }
+                        showDatePicker = false
+                    }
+                ) {
+                    Text("Pilih")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDatePicker = false }) {
+                    Text("Batal")
+                }
+            }
+        ) {
+            DatePicker(state = datePickerState)
         }
     }
 }

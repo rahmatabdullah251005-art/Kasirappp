@@ -96,11 +96,23 @@ service cloud.firestore {
              isValidTimestamp(data.updatedAt);
     }
 
+    function isValidStoreCategory(data) {
+      return data.code is string && data.code.size() >= 1 && data.code.size() <= 60 &&
+             data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 60 &&
+             data.codePrefix is string && data.codePrefix.size() >= 1 && data.codePrefix.size() <= 8 &&
+             data.colorIndex is int && data.colorIndex >= 0 && data.colorIndex <= 20 &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
     function isValidProduct(data) {
       return data.skuCode is string && data.skuCode.size() >= 1 && data.skuCode.size() <= 80 &&
              data.name is string && data.name.size() >= 1 && data.name.size() <= 120 &&
-             data.category in ['BAJU', 'BUKU', 'KEBUTUHAN_MUSLIM', 'AKSESORIS'] &&
+             data.category is string && data.category.size() >= 1 && data.category.size() <= 60 &&
              (!('variantInfo' in data) || (data.variantInfo is string && data.variantInfo.size() <= 160)) &&
+             (!('variantName' in data) || (data.variantName is string && data.variantName.size() <= 80)) &&
+             (!('color' in data) || (data.color is string && data.color.size() <= 60)) &&
+             (!('size' in data) || (data.size is string && data.size.size() <= 60)) &&
              data.costPrice is int && data.costPrice >= 0 &&
              data.sellingPrice is int && data.sellingPrice >= 0 &&
              (!('discountPercent' in data) || (data.discountPercent is int && data.discountPercent >= 0 && data.discountPercent <= 99)) &&
@@ -126,6 +138,7 @@ service cloud.firestore {
              data.cashierUid is string && data.cashierUid.size() >= 1 && data.cashierUid.size() <= 128 &&
              data.cashierName is string && data.cashierName.size() >= 1 && data.cashierName.size() <= 80 &&
              data.cashierRole in ['OWNER', 'KASIR'] &&
+             (!('customerName' in data) || (data.customerName is string && data.customerName.size() <= 80)) &&
              (!('notes' in data) || (data.notes is string && data.notes.size() <= 300)) &&
              (!('qrisReference' in data) || (data.qrisReference is string && data.qrisReference.size() <= 512)) &&
              isValidTimestamp(data.createdAt);
@@ -138,6 +151,7 @@ service cloud.firestore {
              data.productId is string && data.productId.size() >= 1 && data.productId.size() <= 128 &&
              data.skuCode is string && data.skuCode.size() >= 1 && data.skuCode.size() <= 80 &&
              data.productName is string && data.productName.size() >= 1 && data.productName.size() <= 120 &&
+             (!('variantSummary' in data) || (data.variantSummary is string && data.variantSummary.size() <= 160)) &&
              data.categoryName is string && data.categoryName.size() >= 1 && data.categoryName.size() <= 60 &&
              data.quantity is int && data.quantity > 0 &&
              data.unitCostPrice is int && data.unitCostPrice >= 0 &&
@@ -287,24 +301,42 @@ service cloud.firestore {
         allow delete: if isStoreOwner(storeId) && isValidId(staffId) && existing().role != 'OWNER';
       }
 
-      // Store Products (Owner manages full CRUD & modal; Kasir reads catalog and decrements stock on sale)
+      // Store Categories (Owner adds/edits/deletes; Kasir & Owner read)
+      match /categories/{categoryId} {
+        allow get: if isValidId(categoryId) && (isStoreOwner(storeId) || isActiveStoreMember(storeId));
+        allow list: if isStoreOwner(storeId) || isActiveStoreMember(storeId);
+        allow create: if isStoreOwner(storeId) &&
+                         isValidId(categoryId) &&
+                         incoming().keys().hasAll(['code', 'displayName', 'codePrefix', 'colorIndex', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['code', 'displayName', 'codePrefix', 'colorIndex', 'createdAt', 'updatedAt']) &&
+                         isValidStoreCategory(incoming());
+        allow update: if isStoreOwner(storeId) &&
+                         isValidId(categoryId) &&
+                         isValidStoreCategory(incoming()) &&
+                         incoming().code == existing().code &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'codePrefix', 'colorIndex', 'updatedAt']);
+        allow delete: if isStoreOwner(storeId) && isValidId(categoryId);
+      }
+
+      // Store Products (Owner manages full CRUD & modal; Kasir reads catalog and adjusts stock on sale or stock opname)
       match /products/{productId} {
         allow get: if isValidId(productId) && (isStoreOwner(storeId) || isActiveStoreMember(storeId));
         allow list: if isStoreOwner(storeId) || isActiveStoreMember(storeId);
         allow create: if isStoreOwner(storeId) &&
                          isValidId(productId) &&
                          incoming().keys().hasAll(['skuCode', 'name', 'category', 'costPrice', 'sellingPrice', 'stock', 'minStockAlert', 'createdAt', 'updatedAt']) &&
-                         incoming().keys().hasOnly(['skuCode', 'name', 'category', 'variantInfo', 'costPrice', 'sellingPrice', 'discountPercent', 'stock', 'minStockAlert', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['skuCode', 'name', 'category', 'variantInfo', 'variantName', 'color', 'size', 'costPrice', 'sellingPrice', 'discountPercent', 'stock', 'minStockAlert', 'createdAt', 'updatedAt']) &&
                          isValidProduct(incoming());
         allow update: if isValidId(productId) &&
                          isValidProduct(incoming()) &&
                          incoming().createdAt == existing().createdAt && (
                            // Owner can update all mutable fields
                            (isStoreOwner(storeId) &&
-                            incoming().diff(existing()).affectedKeys().hasOnly(['skuCode', 'name', 'category', 'variantInfo', 'costPrice', 'sellingPrice', 'discountPercent', 'stock', 'minStockAlert', 'updatedAt'])) ||
-                           // Active Cashier can ONLY decrement stock during checkout (cannot change costPrice or sellingPrice)
+                            incoming().diff(existing()).affectedKeys().hasOnly(['skuCode', 'name', 'category', 'variantInfo', 'variantName', 'color', 'size', 'costPrice', 'sellingPrice', 'discountPercent', 'stock', 'minStockAlert', 'updatedAt'])) ||
+                           // Active Cashier can ONLY adjust stock (cannot change costPrice, sellingPrice, or metadata)
                            (isActiveStoreMember(storeId) &&
-                            incoming().stock < existing().stock &&
+                            incoming().stock != existing().stock &&
                             incoming().diff(existing()).affectedKeys().hasOnly(['stock', 'updatedAt']))
                          );
         allow delete: if isStoreOwner(storeId) && isValidId(productId);
@@ -323,7 +355,7 @@ service cloud.firestore {
                          (isStoreOwner(storeId) || isActiveStoreMember(storeId)) &&
                          incoming().cashierUid == request.auth.uid &&
                          incoming().keys().hasAll(['invoiceNumber', 'timestampMillis', 'dateKey', 'totalItems', 'totalRevenue', 'discountAmount', 'finalRevenue', 'totalCost', 'netProfit', 'paymentMethod', 'amountPaid', 'changeAmount', 'cashierUid', 'cashierName', 'cashierRole', 'createdAt']) &&
-                         incoming().keys().hasOnly(['invoiceNumber', 'timestampMillis', 'dateKey', 'totalItems', 'totalRevenue', 'discountAmount', 'finalRevenue', 'totalCost', 'netProfit', 'paymentMethod', 'amountPaid', 'changeAmount', 'cashierUid', 'cashierName', 'cashierRole', 'notes', 'qrisReference', 'createdAt']) &&
+                         incoming().keys().hasOnly(['invoiceNumber', 'timestampMillis', 'dateKey', 'totalItems', 'totalRevenue', 'discountAmount', 'finalRevenue', 'totalCost', 'netProfit', 'paymentMethod', 'amountPaid', 'changeAmount', 'cashierUid', 'cashierName', 'cashierRole', 'customerName', 'notes', 'qrisReference', 'createdAt']) &&
                          isValidSaleTransaction(incoming());
         allow update, delete: if false;
       }
@@ -341,12 +373,12 @@ service cloud.firestore {
                          (isStoreOwner(storeId) || isActiveStoreMember(storeId)) &&
                          incoming().cashierUid == request.auth.uid &&
                          incoming().keys().hasAll(['transactionId', 'dateKey', 'timestampMillis', 'productId', 'skuCode', 'productName', 'categoryName', 'quantity', 'unitCostPrice', 'unitSellingPrice', 'subtotalRevenue', 'subtotalCost', 'subtotalProfit', 'cashierUid', 'createdAt']) &&
-                         incoming().keys().hasOnly(['transactionId', 'dateKey', 'timestampMillis', 'productId', 'skuCode', 'productName', 'categoryName', 'quantity', 'unitCostPrice', 'unitSellingPrice', 'subtotalRevenue', 'subtotalCost', 'subtotalProfit', 'cashierUid', 'createdAt']) &&
+                         incoming().keys().hasOnly(['transactionId', 'dateKey', 'timestampMillis', 'productId', 'skuCode', 'productName', 'variantSummary', 'categoryName', 'quantity', 'unitCostPrice', 'unitSellingPrice', 'subtotalRevenue', 'subtotalCost', 'subtotalProfit', 'cashierUid', 'createdAt']) &&
                          isValidSaleItem(incoming());
         allow update, delete: if false;
       }
 
-      // Stock Movement Histories (Append-only; Owner reads all; Kasir can log PENJUALAN on checkout)
+      // Stock Movement Histories (Append-only; Owner reads all; Kasir can log checkout sales & manual stock add/reduce)
       match /stock_histories/{historyId} {
         allow get, list: if isStoreOwner(storeId);
         allow create: if isValidId(historyId) &&
@@ -355,7 +387,11 @@ service cloud.firestore {
                          incoming().keys().hasOnly(['productId', 'productName', 'changeType', 'quantityDelta', 'stockAfter', 'unitCostAtChange', 'actorName', 'actorUid', 'note', 'timestampMillis', 'createdAt']) &&
                          isValidStockHistory(incoming()) && (
                            isStoreOwner(storeId) ||
-                           (isActiveStoreMember(storeId) && incoming().changeType == 'PENJUALAN' && incoming().quantityDelta < 0)
+                           (isActiveStoreMember(storeId) && (
+                             (incoming().changeType == 'PENJUALAN' && incoming().quantityDelta < 0) ||
+                             (incoming().changeType == 'RESTOK' && incoming().quantityDelta > 0) ||
+                             (incoming().changeType == 'KOREKSI' && incoming().quantityDelta != 0)
+                           ))
                          );
         allow update, delete: if false;
       }

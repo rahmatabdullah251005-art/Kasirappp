@@ -3,6 +3,8 @@ package com.example.ui.components
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -19,10 +21,12 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AddBox
 import androidx.compose.material.icons.rounded.AutoStories
+import androidx.compose.material.icons.rounded.Category
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Checkroom
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Diamond
+import androidx.compose.material.icons.rounded.LocalOffer
 import androidx.compose.material.icons.rounded.Mosque
 import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.WarningAmber
@@ -57,6 +61,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.example.data.local.entity.ProductCategory
 import com.example.data.remote.ProductDoc
+import com.example.data.remote.StoreCategoryDoc
 import com.example.ui.theme.DangerCrimson
 import com.example.ui.theme.DangerCrimsonContainer
 import com.example.ui.theme.EmeraldContainer
@@ -72,32 +77,44 @@ import com.example.ui.theme.WarningAmberContainer
 import com.example.util.StockAlertSeverity
 import com.example.util.StockAlertUiState
 
-fun ProductCategory.icon(): ImageVector = when (this) {
-    ProductCategory.BAJU -> Icons.Rounded.Checkroom
-    ProductCategory.BUKU -> Icons.Rounded.AutoStories
-    ProductCategory.KEBUTUHAN_MUSLIM -> Icons.Rounded.Mosque
-    ProductCategory.AKSESORIS -> Icons.Rounded.Diamond
+fun StoreCategoryDoc.icon(): ImageVector = when (code.uppercase()) {
+    ProductCategory.BAJU.name -> Icons.Rounded.Checkroom
+    ProductCategory.BUKU.name -> Icons.Rounded.AutoStories
+    ProductCategory.KEBUTUHAN_MUSLIM.name -> Icons.Rounded.Mosque
+    ProductCategory.AKSESORIS.name -> Icons.Rounded.Diamond
+    else -> when (kotlin.math.abs(colorIndex) % 6) {
+        0 -> Icons.Rounded.Checkroom
+        1 -> Icons.Rounded.AutoStories
+        2 -> Icons.Rounded.Mosque
+        3 -> Icons.Rounded.Diamond
+        4 -> Icons.Rounded.Category
+        else -> Icons.Rounded.LocalOffer
+    }
 }
 
 @Composable
-fun ProductCategory.containerColor(): Color = when (this) {
-    ProductCategory.BAJU -> EmeraldContainer
-    ProductCategory.BUKU -> GoldContainer
-    ProductCategory.KEBUTUHAN_MUSLIM -> ProfitGreenContainer
-    ProductCategory.AKSESORIS -> TerracottaContainer
+fun StoreCategoryDoc.containerColor(): Color = when (kotlin.math.abs(colorIndex) % 6) {
+    0 -> EmeraldContainer
+    1 -> GoldContainer
+    2 -> ProfitGreenContainer
+    3 -> TerracottaContainer
+    4 -> MaterialTheme.colorScheme.primaryContainer
+    else -> MaterialTheme.colorScheme.secondaryContainer
 }
 
 @Composable
-fun ProductCategory.contentColor(): Color = when (this) {
-    ProductCategory.BAJU -> EmeraldOnContainer
-    ProductCategory.BUKU -> GoldOnContainer
-    ProductCategory.KEBUTUHAN_MUSLIM -> ProfitGreen
-    ProductCategory.AKSESORIS -> TerracottaOnContainer
+fun StoreCategoryDoc.contentColor(): Color = when (kotlin.math.abs(colorIndex) % 6) {
+    0 -> EmeraldOnContainer
+    1 -> GoldOnContainer
+    2 -> ProfitGreen
+    3 -> TerracottaOnContainer
+    4 -> MaterialTheme.colorScheme.onPrimaryContainer
+    else -> MaterialTheme.colorScheme.onSecondaryContainer
 }
 
 @Composable
 fun CategoryBadge(
-    category: ProductCategory,
+    category: StoreCategoryDoc,
     modifier: Modifier = Modifier
 ) {
     Surface(
@@ -128,6 +145,23 @@ fun CategoryBadge(
 }
 
 @Composable
+fun CategoryBadge(
+    category: ProductCategory,
+    modifier: Modifier = Modifier
+) {
+    CategoryBadge(
+        category = StoreCategoryDoc(
+            id = "cat_${category.name.lowercase()}",
+            code = category.name,
+            displayName = category.displayName,
+            codePrefix = category.codePrefix,
+            colorIndex = category.ordinal
+        ),
+        modifier = modifier
+    )
+}
+
+@Composable
 fun StockStatusBadge(
     stock: Int,
     minAlert: Int,
@@ -150,6 +184,65 @@ fun StockStatusBadge(
             modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
             maxLines = 1
         )
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun ProductAttributeChipsRow(
+    product: ProductDoc,
+    modifier: Modifier = Modifier
+) {
+    val badges = product.attributeBadges
+    val legacyNote = if (badges.isEmpty()) product.variantInfo.trim() else ""
+    if (badges.isEmpty() && legacyNote.isBlank()) return
+
+    FlowRow(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        if (badges.isNotEmpty()) {
+            badges.forEach { (label, value) ->
+                val bgColor = when (label) {
+                    "Warna" -> MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.72f)
+                    "Ukuran" -> MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.75f)
+                    else -> MaterialTheme.colorScheme.surfaceVariant
+                }
+                val fgColor = when (label) {
+                    "Warna" -> MaterialTheme.colorScheme.onSecondaryContainer
+                    "Ukuran" -> MaterialTheme.colorScheme.onTertiaryContainer
+                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                }
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = bgColor
+                ) {
+                    Text(
+                        text = "$label: $value",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Medium),
+                        color = fgColor,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+                    )
+                }
+            }
+        } else {
+            Surface(
+                shape = RoundedCornerShape(6.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant
+            ) {
+                Text(
+                    text = legacyNote,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+                )
+            }
+        }
     }
 }
 
@@ -475,6 +568,15 @@ fun LowStockAlertCenterDialog(
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis
                                         )
+                                        if (product.resolvedVariantSummary.isNotBlank()) {
+                                            Text(
+                                                text = product.resolvedVariantSummary,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
                                         Text(
                                             text = "${product.categoryEnum.displayName} • ${product.skuCode}",
                                             style = MaterialTheme.typography.labelSmall,

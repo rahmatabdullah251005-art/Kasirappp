@@ -1,6 +1,7 @@
 package com.example
 
 import android.Manifest
+import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
@@ -24,6 +25,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Logout
+import androidx.compose.material.icons.automirrored.rounded.ReceiptLong
 import androidx.compose.material.icons.outlined.Assessment
 import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.outlined.Notifications
@@ -34,8 +36,11 @@ import androidx.compose.material.icons.rounded.LockReset
 import androidx.compose.material.icons.rounded.ManageAccounts
 import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.PointOfSale
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -50,6 +55,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -174,6 +180,8 @@ private fun UmTazkiyahRoot(openOwnerAlertsTrigger: Int = 0) {
                 }
             )
 
+            var showLogoutConfirmDialog by remember { mutableStateOf(false) }
+
             val handleGoogleSignOut: () -> Unit = {
                 viewModel.lockPinSession()
                 signOutGoogleAndFirebase(credentialManager, scope)
@@ -184,8 +192,55 @@ private fun UmTazkiyahRoot(openOwnerAlertsTrigger: Int = 0) {
                 userDisplayName = user.displayName.orEmpty(),
                 openOwnerAlertsTrigger = openOwnerAlertsTrigger,
                 viewModel = viewModel,
-                onSignOutGoogle = handleGoogleSignOut
+                onSignOutGoogle = { showLogoutConfirmDialog = true }
             )
+
+            if (showLogoutConfirmDialog) {
+                AlertDialog(
+                    onDismissRequest = { showLogoutConfirmDialog = false },
+                    icon = {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Rounded.Logout,
+                            contentDescription = null,
+                            tint = DangerCrimson
+                        )
+                    },
+                    title = {
+                        Text(
+                            text = "Yakin ingin keluar dari akun?",
+                            style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+                        )
+                    },
+                    text = {
+                        val accountLabel = user.email?.takeIf { it.isNotBlank() }?.let { " ($it)" }.orEmpty()
+                        Text(
+                            text = "Anda akan keluar dari akun Google$accountLabel dan harus masuk kembali untuk mengakses data toko.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    },
+                    confirmButton = {
+                        Button(
+                            onClick = {
+                                showLogoutConfirmDialog = false
+                                handleGoogleSignOut()
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = DangerCrimson),
+                            modifier = Modifier.testTag("confirm_logout_button")
+                        ) {
+                            Text("Ya, Keluar")
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(
+                            onClick = { showLogoutConfirmDialog = false },
+                            modifier = Modifier.testTag("cancel_logout_button")
+                        ) {
+                            Text("Batal")
+                        }
+                    }
+                )
+            }
         }
     }
 }
@@ -279,6 +334,7 @@ private fun AuthenticatedPosShell(
     val currentRoute = navBackStackEntry?.destination?.route ?: ROUTE_KASIR
 
     val activeStore by viewModel.activeStoreDoc.collectAsStateWithLifecycle()
+    val categories by viewModel.storeCategories.collectAsStateWithLifecycle()
     val products by viewModel.allProducts.collectAsStateWithLifecycle()
     val cartItems by viewModel.cartItems.collectAsStateWithLifecycle()
     val lastReceipt by viewModel.lastReceipt.collectAsStateWithLifecycle()
@@ -286,11 +342,26 @@ private fun AuthenticatedPosShell(
     val allStaffPins by viewModel.allStaffPins.collectAsStateWithLifecycle()
     val storeInvites by viewModel.storeInvites.collectAsStateWithLifecycle()
     val reportState by viewModel.dailyReportState.collectAsStateWithLifecycle()
+    val allOwnerTransactions by viewModel.allOwnerTransactions.collectAsStateWithLifecycle()
     val selectedDateKey by viewModel.selectedReportDateKey.collectAsStateWithLifecycle()
     val periodMode by viewModel.reportPeriodMode.collectAsStateWithLifecycle()
     val sevenDayTrend by viewModel.sevenDayTrend.collectAsStateWithLifecycle()
     val cashierTodayTxs by viewModel.cashierTodayTransactions.collectAsStateWithLifecycle()
+    val cashierRecapSales by viewModel.cashierRecapSales.collectAsStateWithLifecycle()
+    val selectedCashierRecapDateKey by viewModel.selectedCashierRecapDateKey.collectAsStateWithLifecycle()
     val stockAlertState by viewModel.stockAlertState.collectAsStateWithLifecycle()
+
+    LaunchedEffect(isOwner, storeContext.storeId) {
+        if (isOwner) {
+            val prefs = context.getSharedPreferences("um_tazkiyah_prefs", Context.MODE_PRIVATE)
+            val key = "cat_bootstrapped_${storeContext.storeId}"
+            if (!prefs.getBoolean(key, false)) {
+                viewModel.bootstrapDefaultCategoriesIfEmpty {
+                    prefs.edit().putBoolean(key, true).apply()
+                }
+            }
+        }
+    }
 
     val snackbarHostState = remember { SnackbarHostState() }
     var showQrScanner by remember { mutableStateOf(false) }
@@ -299,6 +370,7 @@ private fun AuthenticatedPosShell(
     var restockTargetFromAlert by remember { mutableStateOf<ProductDoc?>(null) }
     var prefilledSkuForStok by remember { mutableStateOf<String?>(null) }
     var openLowStockFilterTrigger by remember { mutableIntStateOf(0) }
+    var openCashierRecapTrigger by remember { mutableIntStateOf(0) }
 
     var hasNotifPermission by remember {
         mutableStateOf(StockNotificationHelper.hasNotificationPermission(context))
@@ -506,6 +578,19 @@ private fun AuthenticatedPosShell(
                                     contentDescription = "Kelola Pegawai & PIN"
                                 )
                             }
+                        } else {
+                            IconButton(
+                                onClick = {
+                                    navigateTo(ROUTE_KASIR)
+                                    openCashierRecapTrigger++
+                                },
+                                modifier = Modifier.testTag("cashier_topbar_recap_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Rounded.ReceiptLong,
+                                    contentDescription = "Kirim Rekap Transaksi Pegawai"
+                                )
+                            }
                         }
                         IconButton(
                             onClick = viewModel::lockPinSession,
@@ -619,9 +704,14 @@ private fun AuthenticatedPosShell(
                             cloudMemberRole = storeContext.cloudMemberRole,
                             activeStore = activeStore,
                             products = products,
+                            categories = categories,
                             cartItems = cartItems,
                             lastReceipt = lastReceipt,
                             cashierTodayTransactions = cashierTodayTxs,
+                            cashierRecapSales = cashierRecapSales,
+                            selectedCashierRecapDateKey = selectedCashierRecapDateKey,
+                            onSelectCashierRecapDate = viewModel::selectCashierRecapDate,
+                            externalOpenCashierRecapTrigger = openCashierRecapTrigger,
                             onAddToCart = viewModel::addToCart,
                             onUpdateCartQty = viewModel::updateCartQuantity,
                             onSetCartItemCustomPrice = viewModel::setCartItemCustomPrice,
@@ -637,8 +727,10 @@ private fun AuthenticatedPosShell(
                     }
                     composable(ROUTE_STOK) {
                         StokScreen(
+                            storeName = storeContext.storeName,
                             userRole = currentUser.roleEnum,
                             products = products,
+                            categories = categories,
                             stockHistories = stockHistories,
                             prefilledSkuRequest = prefilledSkuForStok,
                             onClearPrefilledSkuRequest = { prefilledSkuForStok = null },
@@ -647,8 +739,13 @@ private fun AuthenticatedPosShell(
                             onSaveProduct = viewModel::saveProduct,
                             onUpdateProductPricing = viewModel::updateProductPricing,
                             onRestockProduct = viewModel::restockProduct,
+                            onAdjustStock = viewModel::adjustProductStock,
                             onDeleteProduct = viewModel::deleteProduct,
-                            onSeedStarterCatalog = viewModel::seedStarterCatalog
+                            onCreateCategory = viewModel::createCategory,
+                            onDeleteCategory = viewModel::deleteCategory,
+                            onRestoreDefaultCategories = viewModel::restoreDefaultCategories,
+                            onSeedStarterCatalog = viewModel::seedStarterCatalog,
+                            onShowMessage = viewModel::emitToast
                         )
                     }
                     if (isOwner) {
@@ -656,6 +753,8 @@ private fun AuthenticatedPosShell(
                             LaporanScreen(
                                 storeName = storeContext.storeName,
                                 reportState = reportState,
+                                allOwnerTransactions = allOwnerTransactions,
+                                stockHistories = stockHistories,
                                 selectedDateKey = selectedDateKey,
                                 periodMode = periodMode,
                                 sevenDayTrend = sevenDayTrend,
