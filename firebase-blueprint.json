@@ -1,0 +1,189 @@
+{
+  "entities": {
+    "Store": {
+      "title": "Store",
+      "description": "Toko UM TAZKIYAH yang dimiliki oleh Owner dan dapat dipantau lintas perangkat secara online.",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string" },
+        "storeName": { "type": "string" },
+        "qrisPayload": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Set via FieldValue.serverTimestamp()" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Set via FieldValue.serverTimestamp()" }
+      },
+      "required": ["ownerUid", "storeName", "qrisPayload", "createdAt", "updatedAt"]
+    },
+    "StoreMember": {
+      "title": "StoreMember",
+      "description": "Keanggotaan perangkat/akun Google pada toko (Owner atau Pegawai Kasir).",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "storeId": { "type": "string" },
+        "ownerUid": { "type": "string" },
+        "storeName": { "type": "string" },
+        "fullName": { "type": "string" },
+        "email": { "type": "string" },
+        "inviteId": { "type": "string" },
+        "role": { "type": "string", "enum": ["OWNER", "KASIR"] },
+        "isActive": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "storeId", "ownerUid", "storeName", "fullName", "role", "isActive", "createdAt", "updatedAt"]
+    },
+    "StoreInvite": {
+      "title": "StoreInvite",
+      "description": "Undangan email Google bagi Pegawai Kasir untuk terhubung ke toko secara online.",
+      "type": "object",
+      "properties": {
+        "storeId": { "type": "string" },
+        "storeName": { "type": "string" },
+        "ownerUid": { "type": "string" },
+        "cashierEmail": { "type": "string" },
+        "cashierName": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "accepted"] },
+        "acceptedUid": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["storeId", "storeName", "ownerUid", "cashierEmail", "cashierName", "status", "createdAt", "updatedAt"]
+    },
+    "StaffPinProfile": {
+      "title": "StaffPinProfile",
+      "description": "Profil PIN lokal per toko untuk memisahkan mode Owner dan Pegawai Kasir di perangkat kasir.",
+      "type": "object",
+      "properties": {
+        "username": { "type": "string" },
+        "fullName": { "type": "string" },
+        "role": { "type": "string", "enum": ["OWNER", "KASIR"] },
+        "pinHash": { "type": "string" },
+        "isActive": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["username", "fullName", "role", "pinHash", "isActive", "createdAt", "updatedAt"]
+    },
+    "Product": {
+      "title": "Product",
+      "description": "Barang dagangan toko baju, buku, dan kebutuhan muslim beserta modal, harga jual, QR/SKU, dan stok.",
+      "type": "object",
+      "properties": {
+        "skuCode": { "type": "string" },
+        "name": { "type": "string" },
+        "category": { "type": "string", "enum": ["BAJU", "BUKU", "KEBUTUHAN_MUSLIM", "AKSESORIS"] },
+        "variantInfo": { "type": "string" },
+        "costPrice": { "type": "integer" },
+        "sellingPrice": { "type": "integer" },
+        "discountPercent": { "type": "integer" },
+        "stock": { "type": "integer" },
+        "minStockAlert": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["skuCode", "name", "category", "costPrice", "sellingPrice", "stock", "minStockAlert", "createdAt", "updatedAt"]
+    },
+    "SaleTransaction": {
+      "title": "SaleTransaction",
+      "description": "Transaksi penjualan kasir lengkap dengan omzet, diskon, modal, keuntungan bersih, dan metode bayar.",
+      "type": "object",
+      "properties": {
+        "invoiceNumber": { "type": "string" },
+        "timestampMillis": { "type": "integer" },
+        "dateKey": { "type": "string" },
+        "totalItems": { "type": "integer" },
+        "totalRevenue": { "type": "integer" },
+        "discountAmount": { "type": "integer" },
+        "finalRevenue": { "type": "integer" },
+        "totalCost": { "type": "integer" },
+        "netProfit": { "type": "integer" },
+        "paymentMethod": { "type": "string", "enum": ["TUNAI", "QRIS", "TRANSFER"] },
+        "amountPaid": { "type": "integer" },
+        "changeAmount": { "type": "integer" },
+        "cashierUid": { "type": "string" },
+        "cashierName": { "type": "string" },
+        "cashierRole": { "type": "string", "enum": ["OWNER", "KASIR"] },
+        "notes": { "type": "string" },
+        "qrisReference": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["invoiceNumber", "timestampMillis", "dateKey", "totalItems", "totalRevenue", "discountAmount", "finalRevenue", "totalCost", "netProfit", "paymentMethod", "amountPaid", "changeAmount", "cashierUid", "cashierName", "cashierRole", "createdAt"]
+    },
+    "SaleItem": {
+      "title": "SaleItem",
+      "description": "Rincian item terjual per transaksi beserta snapshot harga jual, modal, dan keuntungan.",
+      "type": "object",
+      "properties": {
+        "transactionId": { "type": "string" },
+        "dateKey": { "type": "string" },
+        "timestampMillis": { "type": "integer" },
+        "productId": { "type": "string" },
+        "skuCode": { "type": "string" },
+        "productName": { "type": "string" },
+        "categoryName": { "type": "string" },
+        "quantity": { "type": "integer" },
+        "unitCostPrice": { "type": "integer" },
+        "unitSellingPrice": { "type": "integer" },
+        "subtotalRevenue": { "type": "integer" },
+        "subtotalCost": { "type": "integer" },
+        "subtotalProfit": { "type": "integer" },
+        "cashierUid": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["transactionId", "dateKey", "timestampMillis", "productId", "skuCode", "productName", "categoryName", "quantity", "unitCostPrice", "unitSellingPrice", "subtotalRevenue", "subtotalCost", "subtotalProfit", "cashierUid", "createdAt"]
+    },
+    "StockHistory": {
+      "title": "StockHistory",
+      "description": "Catatan riwayat perubahan stok (produk baru, restok, koreksi, penjualan kasir).",
+      "type": "object",
+      "properties": {
+        "productId": { "type": "string" },
+        "productName": { "type": "string" },
+        "changeType": { "type": "string", "enum": ["PRODUK_BARU", "RESTOK", "PENJUALAN", "KOREKSI"] },
+        "quantityDelta": { "type": "integer" },
+        "stockAfter": { "type": "integer" },
+        "unitCostAtChange": { "type": "integer" },
+        "actorName": { "type": "string" },
+        "actorUid": { "type": "string" },
+        "note": { "type": "string" },
+        "timestampMillis": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["productId", "productName", "changeType", "quantityDelta", "stockAfter", "unitCostAtChange", "actorName", "actorUid", "timestampMillis", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/stores/{storeId}": {
+      "schema": { "$ref": "#/entities/Store" },
+      "description": "Dokumen toko utama UM TAZKIYAH"
+    },
+    "/stores/{storeId}/members/{memberUid}": {
+      "schema": { "$ref": "#/entities/StoreMember" },
+      "description": "Daftar anggota toko (Owner & Pegawai Kasir)"
+    },
+    "/stores/{storeId}/staff_pins/{staffId}": {
+      "schema": { "$ref": "#/entities/StaffPinProfile" },
+      "description": "Profil PIN Owner dan Kasir per toko"
+    },
+    "/stores/{storeId}/products/{productId}": {
+      "schema": { "$ref": "#/entities/Product" },
+      "description": "Katalog barang dan stok real-time toko"
+    },
+    "/stores/{storeId}/transactions/{transactionId}": {
+      "schema": { "$ref": "#/entities/SaleTransaction" },
+      "description": "Riwayat transaksi penjualan kasir real-time"
+    },
+    "/stores/{storeId}/sale_items/{saleItemId}": {
+      "schema": { "$ref": "#/entities/SaleItem" },
+      "description": "Detail item terjual untuk laporan harian"
+    },
+    "/stores/{storeId}/stock_histories/{historyId}": {
+      "schema": { "$ref": "#/entities/StockHistory" },
+      "description": "Audit log pergerakan stok"
+    },
+    "/store_invites/{inviteId}": {
+      "schema": { "$ref": "#/entities/StoreInvite" },
+      "description": "Undangan email Google untuk pegawai kasir"
+    }
+  }
+}

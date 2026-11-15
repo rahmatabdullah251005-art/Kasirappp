@@ -1,0 +1,16 @@
+<resources>
+    <string name="app_name">UM TAZKIYAH</string>
+    <string name="store_subtitle">Toko Baju, Buku &amp; Kebutuhan Muslim</string>
+    <string name="nav_kasir">Kasir</string>
+    <string name="nav_stok">Kelola Stok</string>
+    <string name="nav_laporan">Laporan</string>
+    <string name="scan_qr_button">Scan QR</string>
+    <string name="search_product_hint">Cari nama barang, varian, atau kode QR…</string>
+    <string name="add_product">Tambah Barang</string>
+    <string name="checkout_title">Pembayaran Kasir</string>
+    <string name="empty_catalog_title">Belum Ada Barang di Toko</string>
+    <string name="empty_catalog_desc">Tambahkan produk baju, buku, atau perlengkapan muslim secara manual maupun scan QR, atau muat katalog awal contoh.</string>
+    <string name="load_starter_catalog">Muat Contoh Katalog Toko</string>
+    <string name="camera_permission_rationale">Izin kamera diperlukan untuk memindai QR Code dan barcode barang secara otomatis.</string>
+    <string name="grant_camera_permission">Izinkan Kamera</string>
+</resources>

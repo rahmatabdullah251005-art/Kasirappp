@@ -1,0 +1,6 @@
+{
+  "name": "UM TAZKIYAH",
+  "description": "Aplikasi kasir pintar dengan scan QR code, pencatatan modal dan keuntungan otomatis, laporan penjualan harian detail, serta kelola stok untuk toko baju, buku, dan kebutuhan muslim.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
