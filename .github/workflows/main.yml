@@ -19,7 +19,7 @@ permissions:
   contents: read
 
 env:
-  GRADLE_OPTS: "-Xmx3g -Dorg.gradle.jvmargs=-Xmx3g"
+  GRADLE_OPTS: "-Xmx512m"
 
 jobs:
   build-and-unit-tests:
@@ -29,10 +29,10 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "21"
@@ -40,9 +40,19 @@ jobs:
       - name: Accept Android SDK Licenses
         shell: bash
         run: |
-          if [ -n "${ANDROID_HOME:-}" ] && [ -x "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" ]; then
-            mkdir -p "${ANDROID_HOME}/licenses"
-            yes | "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          SDKMANAGER=""
+          for candidate in "${SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" "${SDK_ROOT}"/cmdline-tools/*/bin/sdkmanager; do
+            if [ -x "$candidate" ]; then
+              SDKMANAGER="$candidate"
+              break
+            fi
+          done
+
+          if [ -n "$SDKMANAGER" ]; then
+            mkdir -p "${SDK_ROOT}/licenses" 2>/dev/null || sudo -n mkdir -p "${SDK_ROOT}/licenses" 2>/dev/null || true
+            (yes | "$SDKMANAGER" --sdk_root="${SDK_ROOT}" --licenses >/dev/null 2>&1) || \
+              (yes | sudo -n "$SDKMANAGER" --sdk_root="${SDK_ROOT}" --licenses >/dev/null 2>&1) || true
           fi
 
       - name: Prepare Environment, Keystore & Config
@@ -72,51 +82,74 @@ jobs:
 
           if [ -n "$GOOGLE_SERVICES_JSON_B64" ]; then
             echo "$GOOGLE_SERVICES_JSON_B64" | base64 -d > app/google-services.json
+            echo "HAS_GOOGLE_SERVICES=true" >> "$GITHUB_ENV"
+          elif [ -f app/google-services.json ]; then
+            echo "HAS_GOOGLE_SERVICES=true" >> "$GITHUB_ENV"
+          else
+            echo "HAS_GOOGLE_SERVICES=false" >> "$GITHUB_ENV"
           fi
 
       - name: Set up Gradle 9.3.1
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: "9.3.1"
+
+      - name: Build Debug APK
+        id: build_apk
+        shell: bash
+        run: |
+          RUNNER_CMD="gradle"
+          if [ -x ./gradlew ]; then
+            RUNNER_CMD="./gradlew"
+          fi
+          "$RUNNER_CMD" :app:assembleDebug \
+            -Dorg.gradle.jvmargs="-Xmx3g -Dfile.encoding=UTF-8" \
+            --no-daemon --stacktrace
+
+      - name: Upload Debug APK
+        if: ${{ !cancelled() && steps.build_apk.outcome == 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: tajir-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
 
       - name: Run Unit & Robolectric Tests
         shell: bash
         run: |
+          RUNNER_CMD="gradle"
           if [ -x ./gradlew ]; then
-            ./gradlew :app:testDebugUnitTest \
-              --tests "com.example.ExampleUnitTest" \
-              --tests "com.example.ExampleRobolectricTest" \
-              --no-daemon --stacktrace
-          else
-            gradle :app:testDebugUnitTest \
-              --tests "com.example.ExampleUnitTest" \
-              --tests "com.example.ExampleRobolectricTest" \
-              --no-daemon --stacktrace
+            RUNNER_CMD="./gradlew"
           fi
-
-      - name: Build Debug APK
-        shell: bash
-        run: |
-          if [ -x ./gradlew ]; then
-            ./gradlew :app:assembleDebug --no-daemon --stacktrace
-          else
-            gradle :app:assembleDebug --no-daemon --stacktrace
-          fi
+          "$RUNNER_CMD" :app:testDebugUnitTest \
+            --tests "com.example.ExampleUnitTest" \
+            --tests "com.example.ExampleRobolectricTest" \
+            -Dorg.gradle.jvmargs="-Xmx3g -Dfile.encoding=UTF-8" \
+            --no-daemon --stacktrace
 
       - name: Upload Test Reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: unit-test-reports
           path: app/build/reports/tests/testDebugUnitTest/
           if-no-files-found: ignore
 
-      - name: Upload Debug APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: tajir-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
-          if-no-files-found: error
+      - name: Write APK Download Summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "### Download APK Tajir"
+            if [ "${{ steps.build_apk.outcome }}" = "success" ]; then
+              echo "- Artifact **\`tajir-debug-apk\`** berhasil dibuat. Scroll ke bagian **Artifacts** di halaman ringkasan workflow ini lalu klik **\`tajir-debug-apk\`** untuk mengunduh file ZIP berisi \`app-debug.apk\`."
+              if [ "${HAS_GOOGLE_SERVICES}" != "true" ]; then
+                echo "- Catatan: \`app/google-services.json\` tidak ditemukan saat build CI. Untuk mengaktifkan Google Sign-In & Firestore pada APK hasil build GitHub, tambahkan file \`app/google-services.json\` ke repo atau simpan base64-nya di GitHub Repository Secret \`GOOGLE_SERVICES_JSON_B64\`."
+              fi
+            else
+              echo "- Build APK debug gagal. Periksa log langkah **Build Debug APK**."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
 
   firestore-rules-tests:
     name: Firestore Security Rules Tests
@@ -125,15 +158,15 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Node.js 22
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: "22"
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "21"
@@ -141,9 +174,19 @@ jobs:
       - name: Accept Android SDK Licenses
         shell: bash
         run: |
-          if [ -n "${ANDROID_HOME:-}" ] && [ -x "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" ]; then
-            mkdir -p "${ANDROID_HOME}/licenses"
-            yes | "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          SDKMANAGER=""
+          for candidate in "${SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" "${SDK_ROOT}"/cmdline-tools/*/bin/sdkmanager; do
+            if [ -x "$candidate" ]; then
+              SDKMANAGER="$candidate"
+              break
+            fi
+          done
+
+          if [ -n "$SDKMANAGER" ]; then
+            mkdir -p "${SDK_ROOT}/licenses" 2>/dev/null || sudo -n mkdir -p "${SDK_ROOT}/licenses" 2>/dev/null || true
+            (yes | "$SDKMANAGER" --sdk_root="${SDK_ROOT}" --licenses >/dev/null 2>&1) || \
+              (yes | sudo -n "$SDKMANAGER" --sdk_root="${SDK_ROOT}" --licenses >/dev/null 2>&1) || true
           fi
 
       - name: Prepare Environment & Debug Keystore
@@ -174,7 +217,7 @@ jobs:
           fi
 
       - name: Set up Gradle 9.3.1
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: "9.3.1"
 
@@ -197,11 +240,11 @@ jobs:
             RUNNER_CMD="./gradlew"
           fi
           firebase emulators:exec --only firestore,auth --project demo-no-project \
-            "export FIRESTORE_EMULATOR_HOST=127.0.0.1:8085 && export FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099 && node --test firestore.test.js && ${RUNNER_CMD} :app:testDebugUnitTest --tests \"*Rule*\" --no-daemon --stacktrace"
+            "export FIRESTORE_EMULATOR_HOST=127.0.0.1:8085 && export FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099 && node --test firestore.test.js && ${RUNNER_CMD} :app:testDebugUnitTest --tests \"*Rule*\" -Dorg.gradle.jvmargs=\"-Xmx2g -Dfile.encoding=UTF-8\" --no-daemon --stacktrace"
 
       - name: Upload Rules Test Reports & Emulator Logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: rules-test-reports-and-logs
           path: |
@@ -221,10 +264,10 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "21"
@@ -232,13 +275,23 @@ jobs:
       - name: Accept Android SDK Licenses
         shell: bash
         run: |
-          if [ -n "${ANDROID_HOME:-}" ] && [ -x "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" ]; then
-            mkdir -p "${ANDROID_HOME}/licenses"
-            yes | "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          SDKMANAGER=""
+          for candidate in "${SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" "${SDK_ROOT}"/cmdline-tools/*/bin/sdkmanager; do
+            if [ -x "$candidate" ]; then
+              SDKMANAGER="$candidate"
+              break
+            fi
+          done
+
+          if [ -n "$SDKMANAGER" ]; then
+            mkdir -p "${SDK_ROOT}/licenses" 2>/dev/null || sudo -n mkdir -p "${SDK_ROOT}/licenses" 2>/dev/null || true
+            (yes | "$SDKMANAGER" --sdk_root="${SDK_ROOT}" --licenses >/dev/null 2>&1) || \
+              (yes | sudo -n "$SDKMANAGER" --sdk_root="${SDK_ROOT}" --licenses >/dev/null 2>&1) || true
           fi
 
       - name: Set up Gradle 9.3.1
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: "9.3.1"
 
@@ -271,16 +324,18 @@ jobs:
           echo "$RELEASE_KEYSTORE_BASE64" | base64 -d > /tmp/my-upload-key.jks
           export KEYSTORE_PATH=/tmp/my-upload-key.jks
 
+          RUNNER_CMD="gradle"
           if [ -x ./gradlew ]; then
-            ./gradlew :app:assembleRelease :app:bundleRelease --no-daemon --stacktrace
-          else
-            gradle :app:assembleRelease :app:bundleRelease --no-daemon --stacktrace
+            RUNNER_CMD="./gradlew"
           fi
+          "$RUNNER_CMD" :app:assembleRelease :app:bundleRelease \
+            -Dorg.gradle.jvmargs="-Xmx3g -Dfile.encoding=UTF-8" \
+            --no-daemon --stacktrace
           echo "SKIP_RELEASE_UPLOAD=false" >> "$GITHUB_ENV"
 
       - name: Upload Release APK & AAB
         if: env.SKIP_RELEASE_UPLOAD == 'false'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: tajir-release-artifacts
           path: |

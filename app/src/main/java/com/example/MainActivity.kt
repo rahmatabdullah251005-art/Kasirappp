@@ -106,6 +106,7 @@ import com.example.ui.viewmodel.ActiveStoreContext
 import com.example.ui.viewmodel.PosViewModel
 import com.example.util.StockNotificationHelper
 import com.google.firebase.Firebase
+import com.google.firebase.FirebaseApp
 import com.google.firebase.auth.auth
 import com.google.firebase.firestore.FirebaseFirestore
 
@@ -149,6 +150,14 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun TajirRoot(openOwnerAlertsTrigger: Int = 0) {
     val context = LocalContext.current
+    val isFirebaseInitialized = remember(context) {
+        FirebaseApp.getApps(context).isNotEmpty() || FirebaseApp.initializeApp(context) != null
+    }
+    if (!isFirebaseInitialized) {
+        MissingFirebaseConfigScreen()
+        return
+    }
+
     val scope = rememberCoroutineScope()
     val credentialManager = remember(context) { CredentialManager.create(context) }
 
@@ -241,6 +250,36 @@ private fun TajirRoot(openOwnerAlertsTrigger: Int = 0) {
                     }
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun MissingFirebaseConfigScreen() {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(24.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(
+                text = stringResource(R.string.app_name),
+                style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold)
+            )
+            Text(
+                text = "Konfigurasi Firebase belum terpasang pada APK ini.",
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                color = MaterialTheme.colorScheme.error
+            )
+            Text(
+                text = "Tambahkan file app/google-services.json (atau atur GitHub Secret GOOGLE_SERVICES_JSON_B64) lalu build ulang APK agar login Google dan sinkronisasi Cloud Firestore aktif.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }
