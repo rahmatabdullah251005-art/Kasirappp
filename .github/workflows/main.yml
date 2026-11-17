@@ -80,14 +80,92 @@ jobs:
             fi
           fi
 
-          if [ -n "$GOOGLE_SERVICES_JSON_B64" ]; then
-            echo "$GOOGLE_SERVICES_JSON_B64" | base64 -d > app/google-services.json
-            echo "HAS_GOOGLE_SERVICES=true" >> "$GITHUB_ENV"
-          elif [ -f app/google-services.json ]; then
-            echo "HAS_GOOGLE_SERVICES=true" >> "$GITHUB_ENV"
-          else
-            echo "HAS_GOOGLE_SERVICES=false" >> "$GITHUB_ENV"
-          fi
+          python3 - <<'PY'
+          import base64
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          raw = os.environ.get("GOOGLE_SERVICES_JSON_B64", "")
+          out_path = Path("app/google-services.json")
+          env_path = Path(os.environ["GITHUB_ENV"])
+
+          def write_env(key: str, value: str) -> None:
+              with env_path.open("a", encoding="utf-8") as f:
+                  f.write(f"{key}={value}\n")
+
+          def try_parse_google_services(text: str):
+              cleaned = text.lstrip("\ufeff").strip()
+              if not cleaned:
+                  return None, "Secret kosong."
+              candidates = []
+              if cleaned.startswith("{"):
+                  candidates.append(cleaned)
+              else:
+                  b64 = re.sub(r"^data:[^;]+;base64,", "", cleaned, flags=re.IGNORECASE)
+                  b64 = b64.strip("\"'")
+                  b64 = re.sub(r"\s+", "", b64)
+                  b64 = b64.replace("-", "+").replace("_", "/")
+                  b64 += "=" * ((-len(b64)) % 4)
+                  try:
+                      decoded = base64.b64decode(b64, validate=False).decode("utf-8", errors="strict")
+                      candidates.append(decoded.lstrip("\ufeff").strip())
+                      # Handle accidental double base64 encoding
+                      if candidates[-1] and not candidates[-1].startswith("{"):
+                          b64_2 = re.sub(r"\s+", "", candidates[-1]).replace("-", "+").replace("_", "/")
+                          b64_2 += "=" * ((-len(b64_2)) % 4)
+                          decoded_2 = base64.b64decode(b64_2, validate=False).decode("utf-8", errors="strict")
+                          candidates.append(decoded_2.lstrip("\ufeff").strip())
+                  except Exception as exc:
+                      return None, f"Gagal decode Base64 ({exc.__class__.__name__})."
+
+              last_err = "Format JSON tidak valid."
+              for candidate in candidates:
+                  try:
+                      obj = json.loads(candidate)
+                  except Exception as exc:
+                      last_err = f"Hasil decode bukan JSON valid ({exc.__class__.__name__})."
+                      continue
+                  if not isinstance(obj, dict) or "project_info" not in obj or not isinstance(obj.get("client"), list) or not obj["client"]:
+                      last_err = "Struktur JSON bukan file google-services.json Firebase yang lengkap."
+                      continue
+                  packages = [
+                      c.get("client_info", {}).get("android_client_info", {}).get("package_name", "")
+                      for c in obj["client"]
+                      if isinstance(c, dict)
+                  ]
+                  expected_pkg = "com.aistudio.kasirbarokah.mrzqkp"
+                  if expected_pkg not in packages:
+                      last_err = f"package_name di google-services.json ({', '.join(p for p in packages if p) or 'kosong'}) tidak cocok dengan {expected_pkg}."
+                      continue
+                  return obj, ""
+              return None, last_err
+
+          if raw.strip():
+              parsed, err = try_parse_google_services(raw)
+              if parsed is not None:
+                  out_path.parent.mkdir(parents=True, exist_ok=True)
+                  out_path.write_text(json.dumps(parsed, indent=2) + "\n", encoding="utf-8")
+                  write_env("HAS_GOOGLE_SERVICES", "true")
+                  write_env("GOOGLE_SERVICES_STATUS", "secret_ok")
+                  print("Successfully prepared app/google-services.json from GOOGLE_SERVICES_JSON_B64.")
+              else:
+                  if out_path.exists():
+                      out_path.unlink()
+                  write_env("HAS_GOOGLE_SERVICES", "false")
+                  write_env("GOOGLE_SERVICES_STATUS", "secret_invalid")
+                  write_env("GOOGLE_SERVICES_ERROR", err)
+                  print(f"::warning::GOOGLE_SERVICES_JSON_B64 diabaikan: {err}")
+          elif out_path.exists():
+              write_env("HAS_GOOGLE_SERVICES", "true")
+              write_env("GOOGLE_SERVICES_STATUS", "repo_file")
+              print("Using existing app/google-services.json from repository.")
+          else:
+              write_env("HAS_GOOGLE_SERVICES", "false")
+              write_env("GOOGLE_SERVICES_STATUS", "missing")
+              print("No app/google-services.json found; building APK with fallback screen.")
+          PY
 
       - name: Set up Gradle 9.3.1
         uses: gradle/actions/setup-gradle@v6
@@ -143,7 +221,9 @@ jobs:
             echo "### Download APK Tajir"
             if [ "${{ steps.build_apk.outcome }}" = "success" ]; then
               echo "- Artifact **\`tajir-debug-apk\`** berhasil dibuat. Scroll ke bagian **Artifacts** di halaman ringkasan workflow ini lalu klik **\`tajir-debug-apk\`** untuk mengunduh file ZIP berisi \`app-debug.apk\`."
-              if [ "${HAS_GOOGLE_SERVICES}" != "true" ]; then
+              if [ "${GOOGLE_SERVICES_STATUS}" = "secret_invalid" ]; then
+                echo "- Peringatan: Secret \`GOOGLE_SERVICES_JSON_B64\` terisi tetapi tidak valid (${GOOGLE_SERVICES_ERROR}). Build tetap dilanjutkan tanpa Firebase agar APK tetap bisa diunduh. Pastikan isi secret adalah hasil base64 utuh (atau isi JSON utuh) dari file \`app/google-services.json\`."
+              elif [ "${HAS_GOOGLE_SERVICES}" != "true" ]; then
                 echo "- Catatan: \`app/google-services.json\` tidak ditemukan saat build CI. Untuk mengaktifkan Google Sign-In & Firestore pada APK hasil build GitHub, tambahkan file \`app/google-services.json\` ke repo atau simpan base64-nya di GitHub Repository Secret \`GOOGLE_SERVICES_JSON_B64\`."
               fi
             else
@@ -212,9 +292,43 @@ jobs:
                 -dname "CN=Android Debug,O=Android,C=US"
             fi
           fi
-          if [ -n "$GOOGLE_SERVICES_JSON_B64" ]; then
-            echo "$GOOGLE_SERVICES_JSON_B64" | base64 -d > app/google-services.json
-          fi
+          python3 - <<'PY'
+          import base64
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          raw = os.environ.get("GOOGLE_SERVICES_JSON_B64", "").lstrip("\ufeff").strip()
+          out_path = Path("app/google-services.json")
+          if not raw:
+              raise SystemExit(0)
+
+          candidates = []
+          if raw.startswith("{"):
+              candidates.append(raw)
+          else:
+              b64 = re.sub(r"^data:[^;]+;base64,", "", raw, flags=re.IGNORECASE).strip("\"'")
+              b64 = re.sub(r"\s+", "", b64).replace("-", "+").replace("_", "/")
+              b64 += "=" * ((-len(b64)) % 4)
+              try:
+                  decoded = base64.b64decode(b64, validate=False).decode("utf-8", errors="strict").lstrip("\ufeff").strip()
+                  candidates.append(decoded)
+              except Exception:
+                  candidates = []
+
+          for candidate in candidates:
+              try:
+                  obj = json.loads(candidate)
+                  if isinstance(obj, dict) and "project_info" in obj and obj.get("client"):
+                      out_path.parent.mkdir(parents=True, exist_ok=True)
+                      out_path.write_text(json.dumps(obj, indent=2) + "\n", encoding="utf-8")
+                      print("Prepared app/google-services.json for rules tests.")
+                      raise SystemExit(0)
+              except Exception:
+                  pass
+          print("::warning::GOOGLE_SERVICES_JSON_B64 tidak valid untuk rules tests; melanjutkan tanpa app/google-services.json.")
+          PY
 
       - name: Set up Gradle 9.3.1
         uses: gradle/actions/setup-gradle@v6
@@ -317,11 +431,31 @@ jobs:
             base64 -d debug.keystore.base64 > debug.keystore
           fi
 
-          if [ -n "$GOOGLE_SERVICES_JSON_B64" ]; then
-            echo "$GOOGLE_SERVICES_JSON_B64" | base64 -d > app/google-services.json
-          fi
+          python3 - <<'PY'
+          import base64
+          import json
+          import os
+          import re
+          from pathlib import Path
 
-          echo "$RELEASE_KEYSTORE_BASE64" | base64 -d > /tmp/my-upload-key.jks
+          gs_raw = os.environ.get("GOOGLE_SERVICES_JSON_B64", "").lstrip("\ufeff").strip()
+          if gs_raw:
+              gs_path = Path("app/google-services.json")
+              if gs_raw.startswith("{"):
+                  obj = json.loads(gs_raw)
+              else:
+                  b64 = re.sub(r"^data:[^;]+;base64,", "", gs_raw, flags=re.IGNORECASE).strip("\"'")
+                  b64 = re.sub(r"\s+", "", b64).replace("-", "+").replace("_", "/")
+                  b64 += "=" * ((-len(b64)) % 4)
+                  obj = json.loads(base64.b64decode(b64, validate=False).decode("utf-8", errors="strict").lstrip("\ufeff").strip())
+              gs_path.parent.mkdir(parents=True, exist_ok=True)
+              gs_path.write_text(json.dumps(obj, indent=2) + "\n", encoding="utf-8")
+
+          ks_raw = os.environ.get("RELEASE_KEYSTORE_BASE64", "").strip().strip("\"'")
+          ks_b64 = re.sub(r"\s+", "", ks_raw).replace("-", "+").replace("_", "/")
+          ks_b64 += "=" * ((-len(ks_b64)) % 4)
+          Path("/tmp/my-upload-key.jks").write_bytes(base64.b64decode(ks_b64, validate=False))
+          PY
           export KEYSTORE_PATH=/tmp/my-upload-key.jks
 
           RUNNER_CMD="gradle"
