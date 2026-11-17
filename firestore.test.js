@@ -163,6 +163,40 @@ test("Owner: can create store, products, and list all transactions", async () =>
   await assertSucceeds(
     ownerDb.collection("stores").where("ownerUid", "==", OWNER_UID).get()
   );
+
+  // Can create store with valid storeType and optional customStoreType
+  await assertSucceeds(
+    ownerDb.collection("stores").doc("store_makanan").set({
+      ownerUid: OWNER_UID,
+      storeName: "Tajir Kuliner",
+      storeType: "MAKANAN_MINUMAN",
+      qrisPayload: "000201010211TAJIR",
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    })
+  );
+  await assertSucceeds(
+    ownerDb.collection("stores").doc("store_custom_type").set({
+      ownerUid: OWNER_UID,
+      storeName: "Tajir Kosmetik",
+      storeType: "LAINNYA",
+      customStoreType: "Toko Kosmetik",
+      qrisPayload: "000201010211TAJIR",
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    })
+  );
+  // Rejects invalid storeType enum value
+  await assertFails(
+    ownerDb.collection("stores").doc("store_invalid_type").set({
+      ownerUid: OWNER_UID,
+      storeName: "Tajir Invalid",
+      storeType: "BENGKEL_ILEGAL",
+      qrisPayload: "000201010211TAJIR",
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    })
+  );
 });
 
 test("Owner: rejects ghost field in product write (Shadow Update test)", async () => {

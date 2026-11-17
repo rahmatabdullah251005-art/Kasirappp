@@ -42,17 +42,17 @@ object EscPosReceiptFormatter {
 
     fun buildPlainTextPreview(
         receipt: CloudSaleWithItems,
-        storeName: String = "UM TAZKIYAH",
+        storeName: String = "Tajir",
         paperWidth: PrinterPaperWidth = PrinterPaperWidth.MM_58
     ): String {
         val tx = receipt.transaction
         val w = paperWidth.charsPerLine
         val divider = "-".repeat(w)
-        val effectiveStore = sanitizeAscii(storeName.ifBlank { "UM TAZKIYAH" })
+        val effectiveStore = sanitizeAscii(storeName.ifBlank { "Tajir" })
 
         val sb = StringBuilder()
         sb.appendLine(centerText(effectiveStore, w))
-        sb.appendLine(centerText("Toko Baju, Buku & Muslim", w))
+        sb.appendLine(centerText("Kasir Pintar - Tajir", w))
         sb.appendLine(divider)
         sb.appendLine(formatTwoColumns("No:", tx.invoiceNumber, w))
         sb.appendLine(formatTwoColumns("Tgl:", DateUtils.formatDateTime(tx.timestampMillis), w))
@@ -97,13 +97,13 @@ object EscPosReceiptFormatter {
 
     fun buildEscPosBytes(
         receipt: CloudSaleWithItems,
-        storeName: String = "UM TAZKIYAH",
+        storeName: String = "Tajir",
         paperWidth: PrinterPaperWidth = PrinterPaperWidth.MM_58
     ): ByteArray {
         val tx = receipt.transaction
         val w = paperWidth.charsPerLine
         val divider = "-".repeat(w)
-        val effectiveStore = sanitizeAscii(storeName.ifBlank { "UM TAZKIYAH" })
+        val effectiveStore = sanitizeAscii(storeName.ifBlank { "Tajir" })
 
         val out = ByteArrayOutputStream()
         fun writeLine(text: String = "") {
@@ -120,7 +120,7 @@ object EscPosReceiptFormatter {
         writeLine(effectiveStore)
         out.write(SIZE_NORMAL)
         out.write(BOLD_OFF)
-        writeLine("Toko Baju, Buku & Kebutuhan Muslim")
+        writeLine("Kasir Pintar - Tajir")
         writeLine(divider)
 
         // Transaction Metadata

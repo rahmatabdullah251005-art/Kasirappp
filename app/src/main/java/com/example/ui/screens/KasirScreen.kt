@@ -500,7 +500,7 @@ fun KasirScreen(
                 cartItems = cartItems,
                 showCostAndProfit = isOwner,
                 isOwner = isOwner,
-                storeName = activeStore?.storeName ?: "UM TAZKIYAH",
+                storeName = activeStore?.storeName ?: "Tajir",
                 storeQrisPayload = activeStore?.qrisPayload?.takeIf { it.isNotBlank() }
                     ?: QrisConfigManager.DEFAULT_DEMO_QRIS,
                 onUpdateQty = onUpdateCartQty,
@@ -521,7 +521,7 @@ fun KasirScreen(
     if (lastReceipt != null) {
         ReceiptDialog(
             receipt = lastReceipt,
-            storeName = activeStore?.storeName ?: "UM TAZKIYAH",
+            storeName = activeStore?.storeName ?: "Tajir",
             showCostAndProfit = isOwner,
             onShowMessage = onShowMessage,
             onDismiss = onDismissReceipt
@@ -530,7 +530,7 @@ fun KasirScreen(
 
     if (showCashierShiftSheet) {
         CashierShiftSummaryDialog(
-            storeName = activeStore?.storeName ?: "UM TAZKIYAH",
+            storeName = activeStore?.storeName ?: "Tajir",
             cashierName = currentUser.fullName,
             recapSales = cashierRecapSales,
             selectedDateKey = selectedCashierRecapDateKey,

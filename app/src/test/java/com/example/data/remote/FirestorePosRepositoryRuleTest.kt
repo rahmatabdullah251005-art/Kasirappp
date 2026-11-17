@@ -4,6 +4,7 @@ import com.example.base.FirestoreEmulatorTestBase
 import com.example.data.local.entity.PaymentMethod
 import com.example.data.local.entity.ProductCategory
 import com.example.data.local.entity.StockChangeType
+import com.example.data.local.entity.StoreType
 import com.example.data.local.entity.UserRole
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestoreException
@@ -348,6 +349,32 @@ class FirestorePosRepositoryRuleTest : FirestoreEmulatorTestBase() {
         assertEquals("Aisyah (Kasir)", reduceLog.actorName)
         assertEquals("Stok rusak", reduceLog.note)
         assertEquals(12, reduceLog.stockAfter)
+    }
+
+    @Test
+    fun createOwnerStore_withStoreTypeGrosir_savesStoreTypeAndSeedsGrosirCategories() = runBlocking {
+        signInTestUser(OWNER_EMAIL)
+        val ownerRepo = FirestorePosRepository(firestore, auth)
+
+        val store = withTimeout(DEFAULT_TIMEOUT_MS) {
+            ownerRepo.createOwnerStore(
+                storeName = "Tajir Grosir Makmur",
+                ownerFullName = "Owner Uji",
+                ownerEmail = OWNER_EMAIL,
+                defaultQrisPayload = "000201010211TAJIR",
+                storeType = StoreType.GROSIR
+            ).getOrThrow()
+        }
+        assertEquals(StoreType.GROSIR, store.storeTypeEnum)
+        assertEquals("Toko Grosir", store.resolvedStoreTypeLabel)
+
+        val cats = withTimeout(FLOW_TIMEOUT_MS) {
+            ownerRepo.observeCategories(store.id).first { it.size >= 4 }
+        }
+        assertTrue(cats.any { it.code == "SEMBAKO" })
+        assertTrue(cats.any { it.code == "MINUMAN_KEMASAN" })
+        assertTrue(cats.any { it.code == "KEBUTUHAN_RUMAH" })
+        assertTrue(cats.any { it.code == "SNACK_ECERAN" })
     }
 
     private companion object {

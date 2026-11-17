@@ -5,6 +5,7 @@ import com.example.R
 import com.example.data.local.entity.PaymentMethod
 import com.example.data.local.entity.ProductCategory
 import com.example.data.local.entity.StockChangeType
+import com.example.data.local.entity.StoreType
 import com.example.data.local.entity.UserRole
 import com.example.util.DateUtils
 import com.example.util.PinHasher
@@ -138,21 +139,30 @@ class FirestorePosRepository(
         storeName: String,
         ownerFullName: String,
         ownerEmail: String,
-        defaultQrisPayload: String
+        defaultQrisPayload: String,
+        storeType: StoreType = StoreType.LAINNYA,
+        customStoreType: String = ""
     ): Result<StoreDoc> = runCatching {
         val uid = requireUserId()
         val storeRef = db.collection("stores").document()
         val storeId = storeRef.id
-        val cleanStoreName = storeName.trim().ifBlank { "UM TAZKIYAH" }
-        val cleanOwnerName = ownerFullName.trim().ifBlank { "Owner UM Tazkiyah" }
+        val cleanStoreName = storeName.trim().ifBlank { "Toko Tajir" }
+        val cleanOwnerName = ownerFullName.trim().ifBlank { "Owner Tajir" }
+        val cleanCustomType = if (storeType == StoreType.LAINNYA) {
+            customStoreType.trim().take(60)
+        } else {
+            ""
+        }
 
-        val storePayload = mapOf(
-            "ownerUid" to uid,
-            "storeName" to cleanStoreName,
-            "qrisPayload" to defaultQrisPayload,
-            "createdAt" to FieldValue.serverTimestamp(),
-            "updatedAt" to FieldValue.serverTimestamp()
-        )
+        val storePayload = buildMap<String, Any> {
+            put("ownerUid", uid)
+            put("storeName", cleanStoreName)
+            put("storeType", storeType.name)
+            if (cleanCustomType.isNotBlank()) put("customStoreType", cleanCustomType)
+            put("qrisPayload", defaultQrisPayload)
+            put("createdAt", FieldValue.serverTimestamp())
+            put("updatedAt", FieldValue.serverTimestamp())
+        }
 
         val memberRef = storeRef.collection("members").document(uid)
         val memberPayload = buildMap<String, Any> {
@@ -196,7 +206,7 @@ class FirestorePosRepository(
                     )
                 )
             }
-            StoreCategoryDoc.defaultPresets().forEach { cat ->
+            StoreCategoryDoc.defaultPresetsForStoreType(storeType).forEach { cat ->
                 val catRef = storeRef.collection("categories").document(cat.id)
                 batch.set(
                     catRef,
@@ -215,6 +225,8 @@ class FirestorePosRepository(
                 id = storeId,
                 ownerUid = uid,
                 storeName = cleanStoreName,
+                storeType = storeType.name,
+                customStoreType = cleanCustomType,
                 qrisPayload = defaultQrisPayload
             )
         } catch (e: CancellationException) {
@@ -519,13 +531,16 @@ class FirestorePosRepository(
         }
     }
 
-    suspend fun seedDefaultCategoriesIfEmpty(storeId: String): Result<Int> = runCatching {
+    suspend fun seedDefaultCategoriesIfEmpty(
+        storeId: String,
+        storeType: StoreType = StoreType.LAINNYA
+    ): Result<Int> = runCatching {
         requireUserId()
         val col = db.collection("stores").document(storeId).collection("categories")
         val existing = col.limit(1).get().await()
         if (!existing.isEmpty) return@runCatching 0
 
-        val presets = StoreCategoryDoc.defaultPresets()
+        val presets = StoreCategoryDoc.defaultPresetsForStoreType(storeType)
         val batch = db.batch()
         presets.forEach { cat ->
             batch.set(
@@ -1174,24 +1189,17 @@ class FirestorePosRepository(
         }
     }
 
-    suspend fun seedStarterCatalog(storeId: String, actorName: String): Result<Int> = runCatching {
+    suspend fun seedStarterCatalog(
+        storeId: String,
+        actorName: String,
+        storeType: StoreType = StoreType.LAINNYA
+    ): Result<Int> = runCatching {
         val uid = requireUserId()
         val now = System.currentTimeMillis()
         val existingSkus = db.collection("stores").document(storeId).collection("products")
             .get().await().documents.mapNotNull { it.getString("skuCode")?.uppercase() }.toSet()
 
-        val starter = listOf(
-            ProductDoc(skuCode = "UMT-BJ-001", name = "Gamis Katun Toyobo Premium", category = ProductCategory.BAJU.name, variantName = "Polos", color = "Sage Green", size = "M", variantInfo = "Varian: Polos • Warna: Sage Green • Ukuran: M", costPrice = 135000L, sellingPrice = 195000L, stock = 14, minStockAlert = 4),
-            ProductDoc(skuCode = "UMT-BJ-002", name = "Baju Koko Kurta Linen", category = ProductCategory.BAJU.name, variantName = "Lengan 3/4", color = "Putih Gading", size = "L", variantInfo = "Varian: Lengan 3/4 • Warna: Putih Gading • Ukuran: L", costPrice = 95000L, sellingPrice = 145000L, stock = 18, minStockAlert = 5),
-            ProductDoc(skuCode = "UMT-BJ-003", name = "Khimar Ceruty 2 Layer", category = ProductCategory.BAJU.name, variantName = "Pet Antem", color = "Mocca", size = "All Size", variantInfo = "Varian: Pet Antem • Warna: Mocca • Ukuran: All Size", costPrice = 55000L, sellingPrice = 89000L, stock = 25, minStockAlert = 5),
-            ProductDoc(skuCode = "UMT-BK-001", name = "Sirah Nabawiyah Ar-Rahiq Al-Makhtum", category = ProductCategory.BUKU.name, variantName = "Hardcover", size = "680 Halaman", variantInfo = "Varian: Hardcover • Ukuran: 680 Halaman", costPrice = 88000L, sellingPrice = 130000L, stock = 12, minStockAlert = 3),
-            ProductDoc(skuCode = "UMT-BK-002", name = "Al-Qur'an Terjemah Tajwid A5", category = ProductCategory.BUKU.name, variantName = "Kertas QPP", color = "Emas", size = "A5", variantInfo = "Varian: Kertas QPP • Warna: Emas • Ukuran: A5", costPrice = 62000L, sellingPrice = 95000L, stock = 20, minStockAlert = 5),
-            ProductDoc(skuCode = "UMT-BK-003", name = "Riyadhus Shalihin Terjemah Lengkap", category = ProductCategory.BUKU.name, variantName = "Darul Haq", size = "Hardcover", variantInfo = "Varian: Darul Haq • Ukuran: Hardcover", costPrice = 75000L, sellingPrice = 115000L, stock = 9, minStockAlert = 3),
-            ProductDoc(skuCode = "UMT-KM-001", name = "Sajadah Turki Tebal Motif Kiswah", category = ProductCategory.KEBUTUHAN_MUSLIM.name, variantName = "Motif Kiswah", color = "Emerald Gold", size = "70x110 cm", variantInfo = "Varian: Motif Kiswah • Warna: Emerald Gold • Ukuran: 70x110 cm", costPrice = 70000L, sellingPrice = 110000L, stock = 16, minStockAlert = 4),
-            ProductDoc(skuCode = "UMT-KM-002", name = "Mukena Silk Armani Travel Pouch", category = ProductCategory.KEBUTUHAN_MUSLIM.name, variantName = "Travel Pouch", color = "Dusty Rose", size = "Dewasa", variantInfo = "Varian: Travel Pouch • Warna: Dusty Rose • Ukuran: Dewasa", costPrice = 140000L, sellingPrice = 215000L, stock = 10, minStockAlert = 3),
-            ProductDoc(skuCode = "UMT-KM-003", name = "Parfum Non-Alkohol Kasturi Kijang 12ml", category = ProductCategory.KEBUTUHAN_MUSLIM.name, variantName = "Roll-On Kristal", size = "12ml", variantInfo = "Varian: Roll-On Kristal • Ukuran: 12ml", costPrice = 22000L, sellingPrice = 45000L, stock = 30, minStockAlert = 6),
-            ProductDoc(skuCode = "UMT-AK-001", name = "Peci Rajut Yaman & Tasbih Kayu Kokka", category = ProductCategory.AKSESORIS.name, variantName = "Paket Hemat", color = "Coklat", size = "33 Butir", variantInfo = "Varian: Paket Hemat • Warna: Coklat • Ukuran: 33 Butir", costPrice = 28000L, sellingPrice = 52000L, stock = 22, minStockAlert = 5)
-        )
+        val starter = starterCatalogForStoreType(storeType)
 
         val toInsert = starter.filter { it.skuCode !in existingSkus }
         if (toInsert.isEmpty()) return@runCatching 0
@@ -1245,5 +1253,37 @@ class FirestorePosRepository(
             handleFirestoreError(e, OperationType.WRITE, storeRef.collection("products").path)
             throw e
         }
+    }
+
+    private fun starterCatalogForStoreType(storeType: StoreType): List<ProductDoc> = when (storeType) {
+        StoreType.MAKANAN_MINUMAN -> listOf(
+            ProductDoc(skuCode = "TJR-MK-001", name = "Nasi Ayam Bakar Madu", category = "MAKANAN", variantName = "Pedas Manis", size = "Porsi Reguler", variantInfo = "Varian: Pedas Manis • Ukuran: Porsi Reguler", costPrice = 15000L, sellingPrice = 26000L, stock = 25, minStockAlert = 5),
+            ProductDoc(skuCode = "TJR-MK-002", name = "Mie Goreng Spesial", category = "MAKANAN", variantName = "Telur Mata Sapi", size = "Jumbo", variantInfo = "Varian: Telur Mata Sapi • Ukuran: Jumbo", costPrice = 12000L, sellingPrice = 22000L, stock = 30, minStockAlert = 6),
+            ProductDoc(skuCode = "TJR-MN-001", name = "Es Kopi Susu Gula Aren", category = "MINUMAN", variantName = "Less Sugar", size = "Large 500ml", variantInfo = "Varian: Less Sugar • Ukuran: Large 500ml", costPrice = 9000L, sellingPrice = 18000L, stock = 40, minStockAlert = 8),
+            ProductDoc(skuCode = "TJR-MN-002", name = "Matcha Latte Dingin", category = "MINUMAN", variantName = "Creamy Oat", size = "Regular 350ml", variantInfo = "Varian: Creamy Oat • Ukuran: Regular 350ml", costPrice = 11000L, sellingPrice = 22000L, stock = 28, minStockAlert = 6),
+            ProductDoc(skuCode = "TJR-SK-001", name = "Dimsum Ayam Udang (Isi 4)", category = "SNACK_KUE", variantName = "Saos Mentai", size = "Isi 4", variantInfo = "Varian: Saos Mentai • Ukuran: Isi 4", costPrice = 10000L, sellingPrice = 18000L, stock = 24, minStockAlert = 5),
+            ProductDoc(skuCode = "TJR-PM-001", name = "Paket Hemat Makan + Es Teh", category = "PAKET_MENU", variantName = "Komplit", size = "1 Paket", variantInfo = "Varian: Komplit • Ukuran: 1 Paket", costPrice = 18000L, sellingPrice = 30000L, stock = 20, minStockAlert = 4)
+        )
+        StoreType.GROSIR -> listOf(
+            ProductDoc(skuCode = "TJR-SB-001", name = "Beras Premium Pandan Wangi 5kg", category = "SEMBAKO", variantName = "Pulén Super", size = "5 kg", variantInfo = "Varian: Pulen Super • Ukuran: 5 kg", costPrice = 68000L, sellingPrice = 76000L, stock = 30, minStockAlert = 6),
+            ProductDoc(skuCode = "TJR-SB-002", name = "Minyak Goreng Pouch 2 Liter", category = "SEMBAKO", variantName = "2x Penyaringan", size = "2 Liter", variantInfo = "Varian: 2x Penyaringan • Ukuran: 2 Liter", costPrice = 31000L, sellingPrice = 36000L, stock = 45, minStockAlert = 10),
+            ProductDoc(skuCode = "TJR-SB-003", name = "Gula Pasir Kristal Putih 1kg", category = "SEMBAKO", variantName = "Kemasan Pabrik", size = "1 kg", variantInfo = "Varian: Kemasan Pabrik • Ukuran: 1 kg", costPrice = 15500L, sellingPrice = 18000L, stock = 50, minStockAlert = 10),
+            ProductDoc(skuCode = "TJR-MK-001", name = "Air Mineral Gelas 1 Dus (48 Cup)", category = "MINUMAN_KEMASAN", variantName = "1 Dus", size = "220ml x 48", variantInfo = "Varian: 1 Dus • Ukuran: 220ml x 48", costPrice = 18000L, sellingPrice = 24000L, stock = 24, minStockAlert = 5),
+            ProductDoc(skuCode = "TJR-KR-001", name = "Deterjen Bubuk Ekonomis 770g", category = "KEBUTUHAN_RUMAH", variantName = "Wangi Bunga", size = "770g", variantInfo = "Varian: Wangi Bunga • Ukuran: 770g", costPrice = 16000L, sellingPrice = 20500L, stock = 32, minStockAlert = 6),
+            ProductDoc(skuCode = "TJR-SE-001", name = "Mie Instan Goreng 1 Dus (40 Bks)", category = "SNACK_ECERAN", variantName = "Original", size = "1 Dus (40 Pcs)", variantInfo = "Varian: Original • Ukuran: 1 Dus (40 Pcs)", costPrice = 106000L, sellingPrice = 118000L, stock = 18, minStockAlert = 4)
+        )
+        StoreType.BAJU -> listOf(
+            ProductDoc(skuCode = "TJR-BJ-001", name = "Kemeja Linen Oversize", category = "BAJU", variantName = "Polos", color = "Sage Green", size = "L", variantInfo = "Varian: Polos • Warna: Sage Green • Ukuran: L", costPrice = 95000L, sellingPrice = 149000L, stock = 18, minStockAlert = 4),
+            ProductDoc(skuCode = "TJR-BJ-002", name = "Gamis Katun Toyobo Premium", category = "BAJU", variantName = "Busui Friendly", color = "Mocca", size = "M", variantInfo = "Varian: Busui Friendly • Warna: Mocca • Ukuran: M", costPrice = 135000L, sellingPrice = 195000L, stock = 14, minStockAlert = 4),
+            ProductDoc(skuCode = "TJR-CR-001", name = "Celana Chino Slim Fit", category = "CELANA_ROK", variantName = "Stretch", color = "Khaki", size = "32", variantInfo = "Varian: Stretch • Warna: Khaki • Ukuran: 32", costPrice = 110000L, sellingPrice = 165000L, stock = 16, minStockAlert = 4),
+            ProductDoc(skuCode = "TJR-HJ-001", name = "Pashmina Ceruty Babydoll", category = "HIJAB_KERUDUNG", variantName = "Jahit Tepi", color = "Dusty Pink", size = "180x75 cm", variantInfo = "Varian: Jahit Tepi • Warna: Dusty Pink • Ukuran: 180x75 cm", costPrice = 24000L, sellingPrice = 45000L, stock = 30, minStockAlert = 6),
+            ProductDoc(skuCode = "TJR-AK-001", name = "Ikat Pinggang Kulit Sintetis", category = "AKSESORIS", variantName = "Gesper Alloy", color = "Hitam", size = "115 cm", variantInfo = "Varian: Gesper Alloy • Warna: Hitam • Ukuran: 115 cm", costPrice = 32000L, sellingPrice = 59000L, stock = 20, minStockAlert = 5)
+        )
+        StoreType.LAINNYA -> listOf(
+            ProductDoc(skuCode = "TJR-PU-001", name = "Produk Unggulan Harian", category = "PRODUK_UTAMA", variantName = "Reguler", color = "Netral", size = "Standar", variantInfo = "Varian: Reguler • Warna: Netral • Ukuran: Standar", costPrice = 35000L, sellingPrice = 55000L, stock = 20, minStockAlert = 5),
+            ProductDoc(skuCode = "TJR-KH-001", name = "Paket Kebutuhan Harian", category = "KEBUTUHAN_HARIAN", variantName = "Hemat", size = "Pack", variantInfo = "Varian: Hemat • Ukuran: Pack", costPrice = 22000L, sellingPrice = 35000L, stock = 25, minStockAlert = 5),
+            ProductDoc(skuCode = "TJR-PL-001", name = "Perlengkapan Serbaguna", category = "PERLENGKAPAN", variantName = "Premium", color = "Biru", size = "Medium", variantInfo = "Varian: Premium • Warna: Biru • Ukuran: Medium", costPrice = 45000L, sellingPrice = 75000L, stock = 15, minStockAlert = 3),
+            ProductDoc(skuCode = "TJR-AK-001", name = "Aksesoris Pelengkap", category = "AKSESORIS", variantName = "Klasik", color = "Hitam", size = "All Size", variantInfo = "Varian: Klasik • Warna: Hitam • Ukuran: All Size", costPrice = 18000L, sellingPrice = 32000L, stock = 30, minStockAlert = 5)
+        )
     }
 }

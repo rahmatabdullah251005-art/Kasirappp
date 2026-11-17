@@ -55,6 +55,8 @@ service cloud.firestore {
     function isValidStore(data) {
       return data.ownerUid is string && data.ownerUid.size() >= 1 && data.ownerUid.size() <= 128 &&
              data.storeName is string && data.storeName.size() >= 1 && data.storeName.size() <= 80 &&
+             (!('storeType' in data) || (data.storeType is string && data.storeType in ['MAKANAN_MINUMAN', 'GROSIR', 'BAJU', 'LAINNYA'])) &&
+             (!('customStoreType' in data) || (data.customStoreType is string && data.customStoreType.size() <= 60)) &&
              data.qrisPayload is string && data.qrisPayload.size() >= 1 && data.qrisPayload.size() <= 1024 &&
              isValidTimestamp(data.createdAt) &&
              isValidTimestamp(data.updatedAt);
@@ -229,7 +231,7 @@ service cloud.firestore {
                        isValidId(storeId) &&
                        incoming().ownerUid == request.auth.uid &&
                        incoming().keys().hasAll(['ownerUid', 'storeName', 'qrisPayload', 'createdAt', 'updatedAt']) &&
-                       incoming().keys().hasOnly(['ownerUid', 'storeName', 'qrisPayload', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['ownerUid', 'storeName', 'storeType', 'customStoreType', 'qrisPayload', 'createdAt', 'updatedAt']) &&
                        isValidStore(incoming());
       allow update: if isSignedIn() &&
                        isValidId(storeId) &&
@@ -237,7 +239,7 @@ service cloud.firestore {
                        incoming().ownerUid == existing().ownerUid &&
                        incoming().createdAt == existing().createdAt &&
                        isValidStore(incoming()) &&
-                       incoming().diff(existing()).affectedKeys().hasOnly(['storeName', 'qrisPayload', 'updatedAt']);
+                       incoming().diff(existing()).affectedKeys().hasOnly(['storeName', 'storeType', 'customStoreType', 'qrisPayload', 'updatedAt']);
       allow delete: if isSignedIn() && isValidId(storeId) && existing().ownerUid == request.auth.uid;
 
       // Store Members subcollection

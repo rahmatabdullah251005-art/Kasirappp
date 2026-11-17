@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.local.entity.PaymentMethod
 import com.example.data.local.entity.ProductCategory
+import com.example.data.local.entity.StoreType
 import com.example.data.local.entity.UserRole
 import com.example.data.remote.CloudCartLineRequest
 import com.example.data.remote.CloudSaleWithItems
@@ -103,7 +104,9 @@ sealed interface QrScanOutcome {
 data class ActiveStoreContext(
     val storeId: String,
     val storeName: String,
-    val cloudMemberRole: UserRole
+    val cloudMemberRole: UserRole,
+    val storeType: StoreType = StoreType.LAINNYA,
+    val storeTypeLabel: String = StoreType.LAINNYA.displayName
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -196,7 +199,9 @@ class PosViewModel(
             ActiveStoreContext(
                 storeId = selectedOwned.id,
                 storeName = selectedOwned.storeName,
-                cloudMemberRole = UserRole.OWNER
+                cloudMemberRole = UserRole.OWNER,
+                storeType = selectedOwned.storeTypeEnum,
+                storeTypeLabel = selectedOwned.resolvedStoreTypeLabel
             )
         } else {
             val selectedInvite = if (explicitId != null) {
@@ -458,7 +463,12 @@ class PosViewModel(
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
 
     // --- STORE ONBOARDING ACTIONS ---
-    fun createOwnerStore(storeName: String, ownerName: String) {
+    fun createOwnerStore(
+        storeName: String,
+        ownerName: String,
+        storeType: StoreType = StoreType.LAINNYA,
+        customStoreType: String = ""
+    ) {
         viewModelScope.launch {
             _onboardingBusy.value = true
             _onboardingError.value = null
@@ -466,10 +476,12 @@ class PosViewModel(
                 storeName = storeName,
                 ownerFullName = ownerName,
                 ownerEmail = currentUserEmail,
-                defaultQrisPayload = QrisConfigManager.DEFAULT_DEMO_QRIS
+                defaultQrisPayload = QrisConfigManager.DEFAULT_DEMO_QRIS,
+                storeType = storeType,
+                customStoreType = customStoreType
             ).onSuccess { createdStore ->
                 _selectedStoreId.value = createdStore.id
-                emitToast("Toko online '${createdStore.storeName}' aktif! PIN Owner default: 0000")
+                emitToast("Toko Tajir '${createdStore.storeName}' (${createdStore.resolvedStoreTypeLabel}) aktif! PIN Owner: 0000")
             }.onFailure { err ->
                 _onboardingError.value = err.message ?: "Gagal membuat toko online"
             }
@@ -683,7 +695,8 @@ class PosViewModel(
             return
         }
         viewModelScope.launch {
-            repository.seedDefaultCategoriesIfEmpty(storeCtx.storeId)
+            val type = activeStoreDoc.value?.storeTypeEnum ?: storeCtx.storeType
+            repository.seedDefaultCategoriesIfEmpty(storeCtx.storeId, type)
             onDone()
         }
     }
@@ -742,8 +755,9 @@ class PosViewModel(
         }
         viewModelScope.launch {
             val existingCodes = storeCategories.value.map { it.code.uppercase() }.toSet()
+            val storeType = activeStoreDoc.value?.storeTypeEnum ?: storeCtx.storeType
             var addedCount = 0
-            StoreCategoryDoc.defaultPresets().forEach { preset ->
+            StoreCategoryDoc.defaultPresetsForStoreType(storeType).forEach { preset ->
                 if (preset.code.uppercase() !in existingCodes) {
                     repository.createCategory(
                         storeId = storeCtx.storeId,
@@ -929,8 +943,9 @@ class PosViewModel(
             return
         }
         val actor = _currentPinProfile.value?.fullName ?: currentUserDisplayName.ifBlank { "Owner" }
+        val storeType = activeStoreDoc.value?.storeTypeEnum ?: storeCtx.storeType
         viewModelScope.launch {
-            repository.seedStarterCatalog(storeCtx.storeId, actor)
+            repository.seedStarterCatalog(storeCtx.storeId, actor, storeType)
                 .onSuccess { count ->
                     if (count > 0) {
                         emitToast("$count produk contoh berhasil disimpan ke cloud")
@@ -1034,7 +1049,7 @@ class PosViewModel(
 
     fun generateNextSkuSuggestion(categoryCode: String): String {
         val resolved = StoreCategoryDoc.resolve(categoryCode, storeCategories.value)
-        val prefix = "UMT-${resolved.codePrefix}-"
+        val prefix = "TJR-${resolved.codePrefix}-"
         val existingCount = allProducts.value.count { it.category.equals(categoryCode, ignoreCase = true) } + 1
         var candidate = prefix + existingCount.toString().padStart(3, '0')
         val existingSkus = allProducts.value.map { it.skuCode.uppercase() }.toSet()

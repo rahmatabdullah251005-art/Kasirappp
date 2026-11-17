@@ -109,7 +109,7 @@ import kotlin.math.roundToLong
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun StokScreen(
-    storeName: String = "UM TAZKIYAH",
+    storeName: String = "Tajir",
     userRole: UserRole,
     products: List<ProductDoc>,
     categories: List<StoreCategoryDoc>,

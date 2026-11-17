@@ -3,6 +3,7 @@ package com.example.ui.screens
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,11 +26,16 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Login
 import androidx.compose.material.icons.automirrored.rounded.Logout
 import androidx.compose.material.icons.rounded.AddBusiness
+import androidx.compose.material.icons.rounded.Category
+import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Checkroom
 import androidx.compose.material.icons.rounded.CloudDone
 import androidx.compose.material.icons.rounded.Devices
 import androidx.compose.material.icons.rounded.MailOutline
 import androidx.compose.material.icons.rounded.QrCodeScanner
+import androidx.compose.material.icons.rounded.Restaurant
 import androidx.compose.material.icons.rounded.Security
+import androidx.compose.material.icons.rounded.ShoppingBasket
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
@@ -64,6 +70,7 @@ import androidx.credentials.CredentialManager
 import com.example.R
 import com.example.auth.attemptAutoSignIn
 import com.example.auth.onGoogleSignInClicked
+import com.example.data.local.entity.StoreType
 import com.example.data.remote.StoreInviteDoc
 import com.example.ui.theme.DangerCrimson
 import com.example.ui.theme.DangerCrimsonContainer
@@ -125,7 +132,7 @@ fun GoogleAuthScreen(
                 ) {
                     Image(
                         painter = painterResource(id = R.drawable.img_store_banner),
-                        contentDescription = "Banner Toko UM TAZKIYAH",
+                        contentDescription = "Banner Aplikasi Tajir",
                         contentScale = ContentScale.Crop,
                         modifier = Modifier.fillMaxSize()
                     )
@@ -320,13 +327,15 @@ fun StoreLinkingScreen(
     isBusy: Boolean,
     errorMessage: String?,
     onAcceptInvite: (StoreInviteDoc) -> Unit,
-    onCreateOwnerStore: (storeName: String, ownerName: String) -> Unit,
+    onCreateOwnerStore: (storeName: String, ownerName: String, storeType: StoreType, customStoreType: String) -> Unit,
     onSignOutGoogle: () -> Unit
 ) {
-    var storeNameInput by remember { mutableStateOf("UM TAZKIYAH") }
+    var storeNameInput by remember { mutableStateOf("Toko Tajir") }
     var ownerNameInput by remember(userDisplayName) {
-        mutableStateOf(userDisplayName.ifBlank { "Owner UM Tazkiyah" })
+        mutableStateOf(userDisplayName.ifBlank { "Owner Tajir" })
     }
+    var selectedStoreType by remember { mutableStateOf(StoreType.MAKANAN_MINUMAN) }
+    var customStoreTypeInput by remember { mutableStateOf("") }
 
     Scaffold(
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
@@ -482,7 +491,7 @@ fun StoreLinkingScreen(
                             )
                         }
                         Text(
-                            text = "Jika Anda pemilik toko UM TAZKIYAH, buat toko cloud sekarang. Setelah dibuat, login dengan akun Google yang sama di HP lain untuk memantau toko, atau undang email Google pegawai kasir.",
+                            text = "Jika Anda pemilik toko, atur nama dan jenis usaha Anda sekarang di Tajir. Setelah dibuat, login dengan akun Google yang sama di HP lain untuk memantau toko, atau undang email Google pegawai kasir.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -507,8 +516,68 @@ fun StoreLinkingScreen(
                                 .testTag("create_store_owner_input")
                         )
 
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(
+                                text = "Pilih Jenis Toko",
+                                style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
+                            )
+                            val storeTypes = StoreType.entries
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                storeTypes.chunked(2).forEach { rowTypes ->
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        rowTypes.forEach { type ->
+                                            StoreTypeOptionCard(
+                                                storeType = type,
+                                                selected = selectedStoreType == type,
+                                                onClick = { selectedStoreType = type },
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .testTag("store_type_${type.name.lowercase()}")
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            if (selectedStoreType == StoreType.LAINNYA) {
+                                OutlinedTextField(
+                                    value = customStoreTypeInput,
+                                    onValueChange = { customStoreTypeInput = it.take(60) },
+                                    label = { Text("Jenis Toko Lainnya (Opsional)") },
+                                    placeholder = { Text("Misal: Toko Buku, Kosmetik, Elektronik…") },
+                                    singleLine = true,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("custom_store_type_input")
+                                )
+                            }
+
+                            Surface(
+                                shape = MaterialTheme.shapes.small,
+                                color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    text = "Kategori awal otomatis: ${selectedStoreType.defaultCategoryHint}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
+                                )
+                            }
+                        }
+
                         Button(
-                            onClick = { onCreateOwnerStore(storeNameInput, ownerNameInput) },
+                            onClick = {
+                                onCreateOwnerStore(
+                                    storeNameInput,
+                                    ownerNameInput,
+                                    selectedStoreType,
+                                    customStoreTypeInput
+                                )
+                            },
                             enabled = !isBusy && storeNameInput.isNotBlank() && ownerNameInput.isNotBlank(),
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -535,6 +604,82 @@ fun StoreLinkingScreen(
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun StoreTypeOptionCard(
+    storeType: StoreType,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val icon = when (storeType) {
+        StoreType.MAKANAN_MINUMAN -> Icons.Rounded.Restaurant
+        StoreType.GROSIR -> Icons.Rounded.ShoppingBasket
+        StoreType.BAJU -> Icons.Rounded.Checkroom
+        StoreType.LAINNYA -> Icons.Rounded.Category
+    }
+    val bgColor = if (selected) {
+        MaterialTheme.colorScheme.primaryContainer
+    } else {
+        MaterialTheme.colorScheme.surface
+    }
+    val borderColor = if (selected) {
+        MaterialTheme.colorScheme.primary
+    } else {
+        MaterialTheme.colorScheme.outlineVariant
+    }
+    Surface(
+        modifier = modifier
+            .clip(MaterialTheme.shapes.medium)
+            .clickable(onClick = onClick),
+        shape = MaterialTheme.shapes.medium,
+        color = bgColor,
+        border = BorderStroke(if (selected) 2.dp else 1.dp, borderColor)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = storeType.displayName,
+                    tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp)
+                )
+                if (selected) {
+                    Icon(
+                        imageVector = Icons.Rounded.CheckCircle,
+                        contentDescription = "Terpilih",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
+            Text(
+                text = storeType.displayName,
+                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                text = storeType.subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (selected) {
+                    MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                maxLines = 2
+            )
         }
     }
 }

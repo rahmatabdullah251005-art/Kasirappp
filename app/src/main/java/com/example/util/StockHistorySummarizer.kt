@@ -133,7 +133,7 @@ object StockHistorySummarizer {
         val sorted = histories.sortedByDescending { it.timestampMillis }
         val sb = StringBuilder()
         sb.appendLine("==========================================")
-        sb.appendLine("  REKAP PERGERAKAN STOK - ${storeName.ifBlank { "UM TAZKIYAH" }}")
+        sb.appendLine("  REKAP PERGERAKAN STOK - ${storeName.ifBlank { "Tajir" }}")
         sb.appendLine("==========================================")
         sb.appendLine("Periode   : $periodLabel")
         sb.appendLine("Dicetak   : ${DateUtils.formatDateTime(System.currentTimeMillis())}")

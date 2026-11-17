@@ -108,8 +108,10 @@ object ReportExporter {
 
     fun buildReadableTextReport(
         periodLabel: String,
-        transactions: List<CloudSaleWithItems>
+        transactions: List<CloudSaleWithItems>,
+        storeName: String = "Tajir"
     ): String {
+        val effectiveStore = storeName.ifBlank { "Tajir" }
         val totalRevenue = transactions.sumOf { it.transaction.finalRevenue }
         val totalGrossRevenue = transactions.sumOf { it.transaction.totalRevenue }
         val totalDiscount = transactions.sumOf { it.transaction.discountAmount }
@@ -123,8 +125,8 @@ object ReportExporter {
         val sb = StringBuilder()
         sb.appendLine("================================================")
         sb.appendLine("         LAPORAN PENJUALAN HARIAN")
-        sb.appendLine("               UM TAZKIYAH")
-        sb.appendLine("    Toko Baju, Buku & Kebutuhan Muslim")
+        sb.appendLine("         ${effectiveStore.uppercase()}")
+        sb.appendLine("       Aplikasi Kasir Pintar - Tajir")
         sb.appendLine("================================================")
         sb.appendLine("Periode       : $periodLabel")
         sb.appendLine("Dicetak pada  : ${DateUtils.formatDateTime(System.currentTimeMillis())}")
@@ -186,8 +188,10 @@ object ReportExporter {
 
     fun buildCsvReport(
         periodLabel: String,
-        transactions: List<CloudSaleWithItems>
+        transactions: List<CloudSaleWithItems>,
+        storeName: String = "Tajir"
     ): String {
+        val effectiveStore = storeName.ifBlank { "Tajir" }
         val totalRevenue = transactions.sumOf { it.transaction.finalRevenue }
         val totalCost = transactions.sumOf { it.transaction.totalCost }
         val totalProfit = transactions.sumOf { it.transaction.netProfit }
@@ -196,7 +200,7 @@ object ReportExporter {
         val sb = StringBuilder()
         // UTF-8 BOM for Excel compatibility
         sb.append('\uFEFF')
-        sb.appendLine("Laporan Penjualan Harian UM TAZKIYAH")
+        sb.appendLine("Laporan Penjualan Harian ${escapeCsv(effectiveStore)}")
         sb.appendLine("Periode,\"${escapeCsv(periodLabel)}\"")
         sb.appendLine("Jumlah Transaksi,${transactions.size}")
         sb.appendLine("Total Barang Terjual,$totalItems")
@@ -237,13 +241,13 @@ object ReportExporter {
 
     fun buildCustomerDigitalReceipt(
         receipt: CloudSaleWithItems,
-        storeName: String = "UM TAZKIYAH"
+        storeName: String = "Tajir"
     ): String {
         val tx = receipt.transaction
-        val effectiveStore = storeName.ifBlank { "UM TAZKIYAH" }
+        val effectiveStore = storeName.ifBlank { "Tajir" }
         val sb = StringBuilder()
         sb.appendLine("*STRUK DIGITAL - $effectiveStore*")
-        sb.appendLine("_Toko Baju, Buku & Kebutuhan Muslim_")
+        sb.appendLine("_Aplikasi Kasir Pintar Tajir_")
         sb.appendLine("--------------------------------")
         sb.appendLine("No. Struk : ${tx.invoiceNumber}")
         sb.appendLine("Tanggal   : ${DateUtils.formatDateTime(tx.timestampMillis)}")
@@ -287,7 +291,7 @@ object ReportExporter {
         periodLabel: String,
         transactions: List<CloudSaleWithItems>
     ): String {
-        val effectiveStore = storeName.ifBlank { "UM TAZKIYAH" }
+        val effectiveStore = storeName.ifBlank { "Tajir" }
         val totalRevenue = transactions.sumOf { it.transaction.finalRevenue }
         val totalGrossRevenue = transactions.sumOf { it.transaction.totalRevenue }
         val totalDiscount = transactions.sumOf { it.transaction.discountAmount }
@@ -354,7 +358,7 @@ object ReportExporter {
         periodLabel: String,
         transactions: List<CloudSaleWithItems>
     ): String {
-        val effectiveStore = storeName.ifBlank { "UM TAZKIYAH" }
+        val effectiveStore = storeName.ifBlank { "Tajir" }
         val totalRevenue = transactions.sumOf { it.transaction.finalRevenue }
         val totalItems = transactions.sumOf { it.transaction.totalItems }
 

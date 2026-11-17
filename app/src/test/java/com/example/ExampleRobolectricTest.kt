@@ -5,6 +5,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.example.data.local.entity.PaymentMethod
 import com.example.data.local.entity.ProductCategory
 import com.example.data.local.entity.StockChangeType
+import com.example.data.local.entity.StoreType
 import com.example.data.local.entity.UserRole
 import com.example.data.remote.CloudSaleWithItems
 import com.example.data.remote.ProductDoc
@@ -12,6 +13,7 @@ import com.example.data.remote.SaleItemDoc
 import com.example.data.remote.SaleTransactionDoc
 import com.example.data.remote.StockHistoryDoc
 import com.example.data.remote.StoreCategoryDoc
+import com.example.data.remote.StoreDoc
 import com.example.util.DateUtils
 import com.example.util.EscPosReceiptFormatter
 import com.example.util.PinHasher
@@ -37,10 +39,10 @@ import org.robolectric.annotation.Config
 class ExampleRobolectricTest {
 
     @Test
-    fun readAppNameMatchesUmTazkiyah() {
+    fun readAppNameMatchesTajir() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val appName = context.getString(R.string.app_name)
-        assertEquals("UM TAZKIYAH", appName)
+        assertEquals("Tajir", appName)
     }
 
     @Test
@@ -71,7 +73,7 @@ class ExampleRobolectricTest {
         val hash = PinHasher.hashPin("1234")
         assertTrue(PinHasher.verifyPin("1234", hash))
         assertFalse(PinHasher.verifyPin("9999", hash))
-        assertTrue(QrisConfigManager.DEFAULT_DEMO_QRIS.contains("UM TAZKIYAH"))
+        assertTrue(QrisConfigManager.DEFAULT_DEMO_QRIS.contains("TAJIR"))
     }
 
     @Test
@@ -115,7 +117,7 @@ class ExampleRobolectricTest {
         val sales = listOf(CloudSaleWithItems(tx, listOf(item)))
 
         val textReport = ReportExporter.buildReadableTextReport("Hari Ini", sales)
-        assertTrue(textReport.contains("UM TAZKIYAH"))
+        assertTrue(textReport.contains("TAJIR"))
         assertTrue(textReport.contains("Gamis Madinah"))
         assertTrue(textReport.contains("130.000"))
 
@@ -123,8 +125,8 @@ class ExampleRobolectricTest {
         assertTrue(csvReport.contains("INV-TEST-001"))
         assertTrue(csvReport.contains("QRIS"))
 
-        val customerReceipt = ReportExporter.buildCustomerDigitalReceipt(sales.first(), "UM TAZKIYAH")
-        assertTrue(customerReceipt.contains("STRUK DIGITAL - UM TAZKIYAH"))
+        val customerReceipt = ReportExporter.buildCustomerDigitalReceipt(sales.first(), "Tajir")
+        assertTrue(customerReceipt.contains("STRUK DIGITAL - Tajir"))
         assertTrue(customerReceipt.contains("INV-TEST-001"))
         assertTrue(customerReceipt.contains("Gamis Madinah"))
         assertTrue(customerReceipt.contains("330.000"))
@@ -309,8 +311,8 @@ class ExampleRobolectricTest {
         )
         val receipt = CloudSaleWithItems(tx, listOf(item))
 
-        val preview = EscPosReceiptFormatter.buildPlainTextPreview(receipt, "UM TAZKIYAH", PrinterPaperWidth.MM_58)
-        assertTrue(preview.contains("UM TAZKIYAH"))
+        val preview = EscPosReceiptFormatter.buildPlainTextPreview(receipt, "Tajir", PrinterPaperWidth.MM_58)
+        assertTrue(preview.contains("Tajir"))
         assertTrue(preview.contains("INV-20261115-0042"))
         assertTrue(preview.contains("Bpk. Ridwan"))
         assertTrue(preview.contains("Sajadah Turki Tebal"))
@@ -318,7 +320,7 @@ class ExampleRobolectricTest {
         assertFalse(preview.contains("140.000"))
         assertFalse(preview.contains("95.000"))
 
-        val bytes = EscPosReceiptFormatter.buildEscPosBytes(receipt, "UM TAZKIYAH", PrinterPaperWidth.MM_80)
+        val bytes = EscPosReceiptFormatter.buildEscPosBytes(receipt, "Tajir", PrinterPaperWidth.MM_80)
         assertTrue(bytes.size > 50)
         // Starts with ESC @ initialization sequence (0x1B 0x40)
         assertEquals(0x1B.toByte(), bytes[0])
@@ -422,11 +424,11 @@ class ExampleRobolectricTest {
         )
         val sale = CloudSaleWithItems(tx, listOf(item))
 
-        val digitalReceipt = ReportExporter.buildCustomerDigitalReceipt(sale, "UM TAZKIYAH")
+        val digitalReceipt = ReportExporter.buildCustomerDigitalReceipt(sale, "Tajir")
         assertTrue(digitalReceipt.contains("Warna: Hitam"))
         assertTrue(digitalReceipt.contains("Ukuran: XL"))
 
-        val thermalPreview = EscPosReceiptFormatter.buildPlainTextPreview(sale, "UM TAZKIYAH", PrinterPaperWidth.MM_80)
+        val thermalPreview = EscPosReceiptFormatter.buildPlainTextPreview(sale, "Tajir", PrinterPaperWidth.MM_80)
         assertTrue(thermalPreview.contains("Bordir Emas"))
         assertTrue(thermalPreview.contains("Ukuran: XL"))
 
@@ -475,12 +477,12 @@ class ExampleRobolectricTest {
         val sales = listOf(CloudSaleWithItems(tx, listOf(item)))
 
         val recapText = ReportExporter.buildCashierShiftRecapText(
-            storeName = "UM TAZKIYAH",
+            storeName = "Tajir",
             cashierName = "Aisyah (Kasir)",
             periodLabel = "Minggu, 15 November 2026",
             transactions = sales
         )
-        assertTrue(recapText.contains("REKAP TRANSAKSI PEGAWAI - UM TAZKIYAH"))
+        assertTrue(recapText.contains("REKAP TRANSAKSI PEGAWAI - Tajir"))
         assertTrue(recapText.contains("Aisyah (Kasir)"))
         assertTrue(recapText.contains("425.000"))
         assertTrue(recapText.contains("Khimar Syari Jetblack"))
@@ -491,7 +493,7 @@ class ExampleRobolectricTest {
         assertFalse(recapText.contains("155.000"))
 
         val recapCsv = ReportExporter.buildCashierShiftRecapCsv(
-            storeName = "UM TAZKIYAH",
+            storeName = "Tajir",
             cashierName = "Aisyah (Kasir)",
             periodLabel = "Minggu, 15 November 2026",
             transactions = sales
@@ -619,7 +621,7 @@ class ExampleRobolectricTest {
         assertTrue(ownerText.contains("BARANG BEST SELLER (TERLARIS)"))
         assertTrue(ownerText.contains("#1 Peci Rajut Yaman"))
 
-        val cashierText = ReportExporter.buildCashierShiftRecapText("UM TAZKIYAH", "Aisyah", "15 Nov 2026", sales)
+        val cashierText = ReportExporter.buildCashierShiftRecapText("Tajir", "Aisyah", "15 Nov 2026", sales)
         assertTrue(cashierText.contains("BARANG BEST SELLER SHIFT"))
         assertTrue(cashierText.contains("#1 Peci Rajut Yaman"))
         assertFalse(cashierText.contains("250.000"))
@@ -708,12 +710,53 @@ class ExampleRobolectricTest {
         assertEquals(1, searchByActor.size)
         assertEquals("h2", searchByActor.first().id)
 
-        val recapText = StockHistorySummarizer.buildRecapText("UM TAZKIYAH", "Hari Ini", todayOnly)
-        assertTrue(recapText.contains("REKAP PERGERAKAN STOK - UM TAZKIYAH"))
+        val recapText = StockHistorySummarizer.buildRecapText("Tajir", "Hari Ini", todayOnly)
+        assertTrue(recapText.contains("REKAP PERGERAKAN STOK - Tajir"))
         assertTrue(recapText.contains("+12 pcs"))
         assertTrue(recapText.contains("-2 pcs"))
         assertTrue(recapText.contains("Aisyah (Kasir)"))
         assertTrue(recapText.contains("Kain sobek / rusak"))
+    }
+
+    @Test
+    fun storeTypePresetsCoverAllSupportedStoreTypesAndCustomLabel() {
+        val foodCats = StoreCategoryDoc.defaultPresetsForStoreType(StoreType.MAKANAN_MINUMAN)
+        val grosirCats = StoreCategoryDoc.defaultPresetsForStoreType(StoreType.GROSIR)
+        val bajuCats = StoreCategoryDoc.defaultPresetsForStoreType(StoreType.BAJU)
+        val otherCats = StoreCategoryDoc.defaultPresetsForStoreType(StoreType.LAINNYA)
+
+        assertEquals(4, foodCats.size)
+        assertTrue(foodCats.any { it.code == "MAKANAN" && it.displayName == "Makanan" })
+        assertTrue(foodCats.any { it.code == "MINUMAN" && it.displayName == "Minuman" })
+
+        assertEquals(4, grosirCats.size)
+        assertTrue(grosirCats.any { it.code == "SEMBAKO" && it.displayName == "Sembako" })
+
+        assertEquals(4, bajuCats.size)
+        assertTrue(bajuCats.any { it.code == "BAJU" && it.displayName == "Baju & Atasan" })
+
+        assertEquals(4, otherCats.size)
+        assertTrue(otherCats.any { it.code == "PRODUK_UTAMA" })
+
+        val customStore = StoreDoc(
+            storeName = "Tajir Pustaka",
+            storeType = StoreType.LAINNYA.name,
+            customStoreType = "Toko Buku"
+        )
+        assertEquals("Toko Buku", customStore.resolvedStoreTypeLabel)
+
+        val defaultOtherStore = StoreDoc(
+            storeName = "Tajir Serba Ada",
+            storeType = StoreType.LAINNYA.name,
+            customStoreType = ""
+        )
+        assertEquals("Lainnya", defaultOtherStore.resolvedStoreTypeLabel)
+
+        val fnbStore = StoreDoc(
+            storeName = "Kedai Tajir",
+            storeType = StoreType.MAKANAN_MINUMAN.name
+        )
+        assertEquals("Toko Makanan & Minuman", fnbStore.resolvedStoreTypeLabel)
     }
 }
 

@@ -132,7 +132,7 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             KasirBarokahTheme {
-                UmTazkiyahRoot(openOwnerAlertsTrigger = openOwnerAlertsTrigger)
+                TajirRoot(openOwnerAlertsTrigger = openOwnerAlertsTrigger)
             }
         }
     }
@@ -147,7 +147,7 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-private fun UmTazkiyahRoot(openOwnerAlertsTrigger: Int = 0) {
+private fun TajirRoot(openOwnerAlertsTrigger: Int = 0) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val credentialManager = remember(context) { CredentialManager.create(context) }
@@ -295,8 +295,10 @@ private fun CloudStoreGate(
             )
         }
         currentPinProfile == null -> {
+            val activeStoreDoc by viewModel.activeStoreDoc.collectAsStateWithLifecycle()
             LoginScreen(
                 storeName = storeCtx.storeName,
+                storeTypeLabel = activeStoreDoc?.resolvedStoreTypeLabel ?: storeCtx.storeTypeLabel,
                 googleEmail = userEmail,
                 cloudMemberRole = storeCtx.cloudMemberRole,
                 activeCashiers = activeCashiers,
@@ -532,8 +534,9 @@ private fun AuthenticatedPosShell(
                                     )
                                 }
                             }
+                            val resolvedTypeLabel = activeStore?.resolvedStoreTypeLabel ?: storeContext.storeTypeLabel
                             Text(
-                                text = "${currentUser.fullName} • Online",
+                                text = "${currentUser.fullName} • $resolvedTypeLabel",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )

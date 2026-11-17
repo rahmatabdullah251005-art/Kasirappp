@@ -82,6 +82,7 @@ import com.example.ui.theme.ProfitGreenContainer
 @Composable
 fun LoginScreen(
     storeName: String,
+    storeTypeLabel: String = "",
     googleEmail: String,
     cloudMemberRole: UserRole,
     activeCashiers: List<StaffPinProfileDoc>,
@@ -137,7 +138,7 @@ fun LoginScreen(
                 ) {
                     Image(
                         painter = painterResource(id = R.drawable.img_store_banner),
-                        contentDescription = "Ilustrasi Toko UM Tazkiyah",
+                        contentDescription = "Ilustrasi Toko Tajir",
                         contentScale = ContentScale.Crop,
                         modifier = Modifier.fillMaxSize()
                     )
@@ -164,7 +165,11 @@ fun LoginScreen(
                             color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.92f)
                         ) {
                             Text(
-                                text = "SISTEM KASIR & STOK ONLINE",
+                                text = if (storeTypeLabel.isNotBlank()) {
+                                    "TAJIR POS • ${storeTypeLabel.uppercase()}"
+                                } else {
+                                    "TAJIR • SISTEM KASIR & STOK ONLINE"
+                                },
                                 style = MaterialTheme.typography.labelSmall,
                                 color = Color.White,
                                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)

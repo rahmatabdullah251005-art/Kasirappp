@@ -3,6 +3,7 @@ package com.example.data.remote
 import com.example.data.local.entity.PaymentMethod
 import com.example.data.local.entity.ProductCategory
 import com.example.data.local.entity.StockChangeType
+import com.example.data.local.entity.StoreType
 import com.example.data.local.entity.UserRole
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.DocumentId
@@ -14,11 +15,29 @@ import com.google.firebase.firestore.ServerTimestamp
 data class StoreDoc(
     @DocumentId val id: String = "",
     val ownerUid: String = "",
-    val storeName: String = "UM TAZKIYAH",
+    val storeName: String = "Tajir",
+    val storeType: String = StoreType.LAINNYA.name,
+    val customStoreType: String = "",
     val qrisPayload: String = "",
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
-)
+) {
+    @get:Exclude
+    val storeTypeEnum: StoreType
+        get() = runCatching { StoreType.valueOf(storeType) }.getOrDefault(StoreType.LAINNYA)
+
+    @get:Exclude
+    val resolvedStoreTypeLabel: String
+        get() {
+            val typeEnum = storeTypeEnum
+            val custom = customStoreType.trim()
+            return if (typeEnum == StoreType.LAINNYA && custom.isNotBlank()) {
+                custom
+            } else {
+                typeEnum.displayName
+            }
+        }
+}
 
 @IgnoreExtraProperties
 data class StoreMemberDoc(
@@ -81,36 +100,34 @@ data class StoreCategoryDoc(
     @ServerTimestamp val updatedAt: Timestamp? = null
 ) {
     companion object {
-        fun defaultPresets(): List<StoreCategoryDoc> = listOf(
-            StoreCategoryDoc(
-                id = "cat_baju",
-                code = ProductCategory.BAJU.name,
-                displayName = ProductCategory.BAJU.displayName,
-                codePrefix = ProductCategory.BAJU.codePrefix,
-                colorIndex = 0
-            ),
-            StoreCategoryDoc(
-                id = "cat_buku",
-                code = ProductCategory.BUKU.name,
-                displayName = ProductCategory.BUKU.displayName,
-                codePrefix = ProductCategory.BUKU.codePrefix,
-                colorIndex = 1
-            ),
-            StoreCategoryDoc(
-                id = "cat_kebutuhan_muslim",
-                code = ProductCategory.KEBUTUHAN_MUSLIM.name,
-                displayName = ProductCategory.KEBUTUHAN_MUSLIM.displayName,
-                codePrefix = ProductCategory.KEBUTUHAN_MUSLIM.codePrefix,
-                colorIndex = 2
-            ),
-            StoreCategoryDoc(
-                id = "cat_aksesoris",
-                code = ProductCategory.AKSESORIS.name,
-                displayName = ProductCategory.AKSESORIS.displayName,
-                codePrefix = ProductCategory.AKSESORIS.codePrefix,
-                colorIndex = 3
+        fun defaultPresetsForStoreType(storeType: StoreType): List<StoreCategoryDoc> = when (storeType) {
+            StoreType.MAKANAN_MINUMAN -> listOf(
+                StoreCategoryDoc(id = "cat_makanan", code = "MAKANAN", displayName = "Makanan", codePrefix = "MK", colorIndex = 0),
+                StoreCategoryDoc(id = "cat_minuman", code = "MINUMAN", displayName = "Minuman", codePrefix = "MN", colorIndex = 1),
+                StoreCategoryDoc(id = "cat_snack_kue", code = "SNACK_KUE", displayName = "Snack & Kue", codePrefix = "SK", colorIndex = 2),
+                StoreCategoryDoc(id = "cat_paket_menu", code = "PAKET_MENU", displayName = "Paket Menu", codePrefix = "PM", colorIndex = 3)
             )
-        )
+            StoreType.GROSIR -> listOf(
+                StoreCategoryDoc(id = "cat_sembako", code = "SEMBAKO", displayName = "Sembako", codePrefix = "SB", colorIndex = 0),
+                StoreCategoryDoc(id = "cat_minuman_kemasan", code = "MINUMAN_KEMASAN", displayName = "Minuman Kemasan", codePrefix = "MK", colorIndex = 1),
+                StoreCategoryDoc(id = "cat_kebutuhan_rumah", code = "KEBUTUHAN_RUMAH", displayName = "Kebutuhan Rumah", codePrefix = "KR", colorIndex = 2),
+                StoreCategoryDoc(id = "cat_snack_eceran", code = "SNACK_ECERAN", displayName = "Snack & Eceran", codePrefix = "SE", colorIndex = 3)
+            )
+            StoreType.BAJU -> listOf(
+                StoreCategoryDoc(id = "cat_baju_atasan", code = "BAJU", displayName = "Baju & Atasan", codePrefix = "BJ", colorIndex = 0),
+                StoreCategoryDoc(id = "cat_celana_rok", code = "CELANA_ROK", displayName = "Celana & Rok", codePrefix = "CR", colorIndex = 1),
+                StoreCategoryDoc(id = "cat_hijab", code = "HIJAB_KERUDUNG", displayName = "Hijab & Kerudung", codePrefix = "HJ", colorIndex = 2),
+                StoreCategoryDoc(id = "cat_aksesoris", code = "AKSESORIS", displayName = "Aksesoris", codePrefix = "AK", colorIndex = 3)
+            )
+            StoreType.LAINNYA -> listOf(
+                StoreCategoryDoc(id = "cat_produk_utama", code = "PRODUK_UTAMA", displayName = "Produk Utama", codePrefix = "PU", colorIndex = 0),
+                StoreCategoryDoc(id = "cat_kebutuhan_harian", code = "KEBUTUHAN_HARIAN", displayName = "Kebutuhan Harian", codePrefix = "KH", colorIndex = 1),
+                StoreCategoryDoc(id = "cat_perlengkapan", code = "PERLENGKAPAN", displayName = "Perlengkapan", codePrefix = "PL", colorIndex = 2),
+                StoreCategoryDoc(id = "cat_aksesoris", code = "AKSESORIS", displayName = "Aksesoris", codePrefix = "AK", colorIndex = 3)
+            )
+        }
+
+        fun defaultPresets(): List<StoreCategoryDoc> = defaultPresetsForStoreType(StoreType.LAINNYA)
 
         fun normalizeCode(displayName: String): String {
             val ascii = displayName.trim().uppercase()

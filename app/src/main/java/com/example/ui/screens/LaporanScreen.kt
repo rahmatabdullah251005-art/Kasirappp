@@ -772,6 +772,7 @@ fun LaporanScreen(
 
     if (showExportDialog) {
         ExportReportDialog(
+            storeName = storeName,
             reportState = reportState,
             selectedDateKey = selectedDateKey,
             periodMode = periodMode,
@@ -1217,6 +1218,7 @@ private fun TransactionDetailDialog(
 
 @Composable
 private fun ExportReportDialog(
+    storeName: String,
     reportState: DailyReportUiState,
     selectedDateKey: String,
     periodMode: ReportPeriodMode,
@@ -1224,11 +1226,11 @@ private fun ExportReportDialog(
     onShowMessage: (String) -> Unit
 ) {
     val context = LocalContext.current
-    val textReport = remember(reportState) {
-        ReportExporter.buildReadableTextReport(reportState.periodLabel, reportState.transactions)
+    val textReport = remember(reportState, storeName) {
+        ReportExporter.buildReadableTextReport(reportState.periodLabel, reportState.transactions, storeName)
     }
-    val csvReport = remember(reportState) {
-        ReportExporter.buildCsvReport(reportState.periodLabel, reportState.transactions)
+    val csvReport = remember(reportState, storeName) {
+        ReportExporter.buildCsvReport(reportState.periodLabel, reportState.transactions, storeName)
     }
     val fileStamp = if (periodMode == ReportPeriodMode.SELECTED_DAY) selectedDateKey else "7hari_${DateUtils.todayKey()}"
 
@@ -1323,11 +1325,11 @@ private fun ExportReportDialog(
                 Button(
                     onClick = {
                         try {
-                            val fileName = "Laporan_UM_Tazkiyah_$fileStamp.txt"
+                            val fileName = "Laporan_Tajir_$fileStamp.txt"
                             val uri = ReportExporter.saveTempReportFile(context, fileName, textReport)
                             val shareIntent = Intent(Intent.ACTION_SEND).apply {
                                 type = "text/plain"
-                                putExtra(Intent.EXTRA_SUBJECT, "Laporan Penjualan UM TAZKIYAH - ${reportState.periodLabel}")
+                                putExtra(Intent.EXTRA_SUBJECT, "Laporan Penjualan Tajir - ${reportState.periodLabel}")
                                 putExtra(Intent.EXTRA_TEXT, textReport)
                                 putExtra(Intent.EXTRA_STREAM, uri)
                                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
@@ -1352,7 +1354,7 @@ private fun ExportReportDialog(
                 ) {
                     FilledTonalButton(
                         onClick = {
-                            saveCsvLauncher.launch("Laporan_UM_Tazkiyah_$fileStamp.csv")
+                            saveCsvLauncher.launch("Laporan_Tajir_$fileStamp.csv")
                         },
                         modifier = Modifier.weight(1f)
                     ) {
@@ -1362,7 +1364,7 @@ private fun ExportReportDialog(
                     }
                     OutlinedButton(
                         onClick = {
-                            saveTxtLauncher.launch("Laporan_UM_Tazkiyah_$fileStamp.txt")
+                            saveTxtLauncher.launch("Laporan_Tajir_$fileStamp.txt")
                         },
                         modifier = Modifier.weight(1f)
                     ) {
@@ -1373,7 +1375,7 @@ private fun ExportReportDialog(
                 OutlinedButton(
                     onClick = {
                         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                        clipboard.setPrimaryClip(ClipData.newPlainText("Laporan UM TAZKIYAH", textReport))
+                        clipboard.setPrimaryClip(ClipData.newPlainText("Laporan Tajir", textReport))
                         onShowMessage("Laporan disalin ke clipboard")
                     },
                     modifier = Modifier.fillMaxWidth()

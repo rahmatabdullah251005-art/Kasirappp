@@ -2,11 +2,13 @@
   "entities": {
     "Store": {
       "title": "Store",
-      "description": "Toko UM TAZKIYAH yang dimiliki oleh Owner dan dapat dipantau lintas perangkat secara online.",
+      "description": "Toko Tajir yang dimiliki oleh Owner dan dapat dipantau lintas perangkat secara online.",
       "type": "object",
       "properties": {
         "ownerUid": { "type": "string" },
         "storeName": { "type": "string" },
+        "storeType": { "type": "string", "enum": ["MAKANAN_MINUMAN", "GROSIR", "BAJU", "LAINNYA"] },
+        "customStoreType": { "type": "string" },
         "qrisPayload": { "type": "string" },
         "createdAt": { "type": "string", "format": "date-time", "description": "Set via FieldValue.serverTimestamp()" },
         "updatedAt": { "type": "string", "format": "date-time", "description": "Set via FieldValue.serverTimestamp()" }
@@ -173,7 +175,7 @@
   "firestore": {
     "/stores/{storeId}": {
       "schema": { "$ref": "#/entities/Store" },
-      "description": "Dokumen toko utama UM TAZKIYAH"
+      "description": "Dokumen toko utama Tajir"
     },
     "/stores/{storeId}/members/{memberUid}": {
       "schema": { "$ref": "#/entities/StoreMember" },
