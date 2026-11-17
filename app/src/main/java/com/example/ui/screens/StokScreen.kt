@@ -462,6 +462,51 @@ fun StokScreen(
                         }
                     }
                 }
+            } else if (filteredProducts.isEmpty()) {
+                item {
+                    Surface(
+                        shape = MaterialTheme.shapes.extraLarge,
+                        color = MaterialTheme.colorScheme.surfaceContainerLow,
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(22.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Search,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(36.dp)
+                            )
+                            Text(
+                                text = "Tidak Ada Barang yang Cocok",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                            )
+                            Text(
+                                text = when {
+                                    searchQuery.isNotBlank() -> "Pencarian \"$searchQuery\" tidak ditemukan di filter ini."
+                                    filterMode == "LOW" -> "Semua stok aman, tidak ada barang dengan stok menipis."
+                                    filterMode == "PROMO" -> "Belum ada barang yang sedang memiliki diskon."
+                                    else -> "Belum ada barang pada kategori ini."
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            FilledTonalButton(
+                                onClick = {
+                                    searchQuery = ""
+                                    filterMode = "ALL"
+                                },
+                                modifier = Modifier.heightIn(min = 48.dp)
+                            ) {
+                                Text("Reset Filter")
+                            }
+                        }
+                    }
+                }
             } else {
                 items(filteredProducts, key = { it.id }) { product ->
                     StokProductCard(

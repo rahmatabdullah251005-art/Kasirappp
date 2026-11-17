@@ -5,8 +5,8 @@ import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageAnalysis
 import androidx.camera.mlkit.vision.MlKitAnalyzer
-import androidx.camera.view.CameraController
 import androidx.camera.view.LifecycleCameraController
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.BorderStroke
@@ -50,6 +50,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -362,7 +363,7 @@ fun PosQrScannerDialog(
                         value = manualCode,
                         onValueChange = { manualCode = it },
                         label = { Text("Atau ketik kode QR / SKU manual") },
-                        placeholder = { Text("Contoh: UMT-BJ-001") },
+                        placeholder = { Text("Contoh: TJR-MK-001") },
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                         keyboardActions = KeyboardActions(
@@ -569,7 +570,7 @@ private fun CameraBarcodePreview(
             executor,
             MlKitAnalyzer(
                 listOf(barcodeScanner),
-                CameraController.COORDINATE_SYSTEM_VIEW_REFERENCED,
+                ImageAnalysis.COORDINATE_SYSTEM_VIEW_REFERENCED,
                 executor
             ) { result ->
                 val barcodes = result?.getValue(barcodeScanner)
@@ -587,7 +588,9 @@ private fun CameraBarcodePreview(
         }
     }
 
-    cameraController.enableTorch(torchEnabled)
+    LaunchedEffect(torchEnabled, cameraController) {
+        cameraController.enableTorch(torchEnabled)
+    }
 
     AndroidView(
         factory = { ctx ->

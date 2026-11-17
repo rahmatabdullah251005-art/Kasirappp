@@ -357,7 +357,7 @@ fun CategoryManagementDialog(
                                     ) {
                                         CategoryBadge(category = cat)
                                         Text(
-                                            text = "Prefix: UMT-${cat.codePrefix}-xxx • $usageCount barang",
+                                            text = "Prefix: TJR-${cat.codePrefix}-xxx • $usageCount barang",
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                                             maxLines = 1,

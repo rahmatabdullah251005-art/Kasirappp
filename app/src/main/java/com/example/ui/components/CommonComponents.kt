@@ -21,14 +21,22 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AddBox
 import androidx.compose.material.icons.rounded.AutoStories
+import androidx.compose.material.icons.rounded.BakeryDining
 import androidx.compose.material.icons.rounded.Category
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Checkroom
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Diamond
+import androidx.compose.material.icons.rounded.Fastfood
+import androidx.compose.material.icons.rounded.Home
+import androidx.compose.material.icons.rounded.Inventory2
+import androidx.compose.material.icons.rounded.LocalCafe
+import androidx.compose.material.icons.rounded.LocalMall
 import androidx.compose.material.icons.rounded.LocalOffer
 import androidx.compose.material.icons.rounded.Mosque
 import androidx.compose.material.icons.rounded.NotificationsActive
+import androidx.compose.material.icons.rounded.Restaurant
+import androidx.compose.material.icons.rounded.ShoppingBasket
 import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -78,17 +86,26 @@ import com.example.util.StockAlertSeverity
 import com.example.util.StockAlertUiState
 
 fun StoreCategoryDoc.icon(): ImageVector = when (code.uppercase()) {
-    ProductCategory.BAJU.name -> Icons.Rounded.Checkroom
+    ProductCategory.BAJU.name, "ATASAN" -> Icons.Rounded.Checkroom
     ProductCategory.BUKU.name -> Icons.Rounded.AutoStories
     ProductCategory.KEBUTUHAN_MUSLIM.name -> Icons.Rounded.Mosque
     ProductCategory.AKSESORIS.name -> Icons.Rounded.Diamond
+    "MAKANAN" -> Icons.Rounded.Restaurant
+    "MINUMAN", "MINUMAN_KEMASAN" -> Icons.Rounded.LocalCafe
+    "SNACK", "SNACK_ECERAN" -> Icons.Rounded.Fastfood
+    "KUE" -> Icons.Rounded.BakeryDining
+    "SEMBAKO" -> Icons.Rounded.ShoppingBasket
+    "KEBUTUHAN_RUMAH" -> Icons.Rounded.Home
+    "HIJAB", "SEPATU_TAS" -> Icons.Rounded.LocalMall
+    "PRODUK_UTAMA" -> Icons.Rounded.Inventory2
+    "PROMO" -> Icons.Rounded.LocalOffer
     else -> when (kotlin.math.abs(colorIndex) % 6) {
-        0 -> Icons.Rounded.Checkroom
-        1 -> Icons.Rounded.AutoStories
-        2 -> Icons.Rounded.Mosque
+        0 -> Icons.Rounded.Inventory2
+        1 -> Icons.Rounded.LocalOffer
+        2 -> Icons.Rounded.ShoppingBasket
         3 -> Icons.Rounded.Diamond
         4 -> Icons.Rounded.Category
-        else -> Icons.Rounded.LocalOffer
+        else -> Icons.Rounded.LocalMall
     }
 }
 
@@ -577,8 +594,9 @@ fun LowStockAlertCenterDialog(
                                                 overflow = TextOverflow.Ellipsis
                                             )
                                         }
+                                        val resolvedCategoryName = StoreCategoryDoc.resolve(product.category, emptyList()).displayName
                                         Text(
-                                            text = "${product.categoryEnum.displayName} • ${product.skuCode}",
+                                            text = "$resolvedCategoryName • ${product.skuCode}",
                                             style = MaterialTheme.typography.labelSmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
